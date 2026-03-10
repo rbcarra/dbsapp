@@ -5,15 +5,15 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, addDoc, dele
 
 // Criado por Rafael Bernhart Carra em 2026 em um plantão longo no HC
 // Talvez mais de um plantão
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'dbs-logger-hcfmusp';
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-  apiKey: "AIzaSyBI2XyZi6otUlN8r7okaSDWFgUaQlREqT8",
-  authDomain: "dbs-logger-hcfmusp.firebaseapp.com",
-  projectId: "dbs-logger-hcfmusp",
-  storageBucket: "dbs-logger-hcfmusp.firebasestorage.app",
-  messagingSenderId: "700872334219",
-  appId: "1:700872334219:web:f373ec6927be01ca36ed8e"
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
+
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
