@@ -15,7 +15,6 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -479,11 +478,15 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores }) => {
     );
   }
 
+  const innerW = timelineW || 300; // largura interna em px, default 300
+
   return (
-    <div style={{ width: timelineW ? `${timelineW}px` : '100%', position: 'relative' }}>
-    <div ref={dragRef} className="flex flex-col mb-1 bg-slate-50 border border-slate-200 rounded-t p-1 space-y-1">
+    <div className="relative w-full">
+      {/* Container com scroll horizontal */}
+      <div className="overflow-x-auto custom-scrollbar rounded-t border border-slate-200 bg-slate-50 mb-1">
+        <div ref={dragRef} className="flex flex-col p-1 space-y-1" style={{ width: `${innerW}px`, minWidth: '100%' }}>
       {/* Eixo X de amplitude */}
-      <div className="relative w-full h-4 mx-0 pl-8 pr-1">
+      <div className="relative h-4 mx-0 pl-8 pr-1">
         {ampTicks.map((tick) => {
           const leftPercent = Math.min(100, (tick / effectiveMax) * 100);
           return (
@@ -596,15 +599,20 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores }) => {
           </div>
         );
       })}
-    </div>
-    {/* Handle de resize horizontal */}
-    <div
-      onMouseDown={iniciarResize}
-      className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize flex items-center justify-center group"
-      title="Arraste para esticar a timeline"
-    >
-      <div className="w-0.5 h-6 bg-slate-300 group-hover:bg-indigo-400 rounded transition-colors" />
-    </div>
+        </div>
+      </div>
+      {/* Controle de largura interna */}
+      <div className="flex items-center gap-1 mt-0.5 mb-1">
+        <span className="text-[8px] text-slate-400 shrink-0">zoom</span>
+        <input
+          type="range" min={200} max={1200} step={50}
+          value={innerW}
+          onChange={e => setTimelineW(Number(e.target.value))}
+          className="flex-1 h-1 accent-indigo-400 cursor-pointer"
+          title="Largura da timeline"
+        />
+        <span className="text-[8px] text-slate-400 shrink-0 w-8">{innerW}px</span>
+      </div>
     </div>
   );
 };
@@ -653,37 +661,6 @@ const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, o
       </div>
 
       <div className="p-4 flex flex-col gap-4 flex-1">
-        {/* Efeito clínico do grupo — movido para cima (mudança 1) */}
-        <div className="flex flex-col gap-1.5 pb-2 border-b border-slate-100">
-           <span className="text-[10px] font-bold text-slate-500 uppercase">Efeito do grupo no paciente <span className="normal-case text-slate-400">(preencher na próxima sessão)</span></span>
-           <div className="flex w-full gap-1 rounded bg-slate-100 p-1">
-             <button
-               onClick={() => onUpdateProg(lado, index, 'efeito', 'bom')}
-               className={`flex-1 py-1.5 rounded text-[10px] font-bold transition-all ${
-                 programa.efeito === 'bom' 
-                 ? 'bg-emerald-500 text-white shadow-sm' 
-                 : 'text-slate-500 hover:bg-slate-200'
-               }`}
-             >Melhor</button>
-             <button
-               onClick={() => onUpdateProg(lado, index, 'efeito', 'neutro')}
-               className={`flex-1 py-1.5 rounded text-[10px] font-bold transition-all ${
-                 (!programa.efeito || programa.efeito === 'neutro') 
-                 ? 'bg-blue-500 text-white shadow-sm' 
-                 : 'text-slate-500 hover:bg-slate-200'
-               }`}
-             >Mantido</button>
-             <button
-               onClick={() => onUpdateProg(lado, index, 'efeito', 'ruim')}
-               className={`flex-1 py-1.5 rounded text-[10px] font-bold transition-all ${
-                 programa.efeito === 'ruim' 
-                 ? 'bg-rose-500 text-white shadow-sm' 
-                 : 'text-slate-500 hover:bg-slate-200'
-               }`}
-             >Colateral</button>
-           </div>
-        </div>
-
         <div className="w-full flex justify-center">
           <VisualizadorEletrodo 
             lado={lado} tipoEletrodo={tipoEletrodo} contatos={programa.contatos} 
@@ -1485,18 +1462,89 @@ export default function App() {
     const config = getStringConfig(prog.contatos, !considerarAmplitude);
     const marcador = {
       id: Date.now() + Math.random(),
-      tipo, // 'tremor', 'rigidez', 'bradicinesia', 'parestesia', etc.
+      tipo,
       config, amp: prog.amp, pw: prog.pw, freq: prog.freq,
       grupo: grupoAtivo, progIdx: programaIdx,
       timestamp: Date.now()
     };
     if (lado === 'L') setMarcadoresClinicosL(prev => [...prev, marcador]);
     else setMarcadoresClinicosR(prev => [...prev, marcador]);
+
+    // Para efeitos colaterais: acrescentar texto na anotação
+    const isColateral = !['tremor','rigidez','bradicinesia'].includes(tipo);
+    if (isColateral) {
+      const leadStr = lado === 'L' ? 'E' : 'D';
+      // Gerar string de contatos
+      const ordem = ORDEM_TEXTO_BAIXO_CIMA[tipoEletrodo];
+      const contactStr = ordem.map(c => {
+        const st = prog.contatos[c]?.state || 'off';
+        if (st === 'off') return '0';
+        const perc = prog.contatos[c].perc;
+        return perc < 100 ? `${st}(${perc}%)` : st;
+      }).join('');
+      const linha = `[Lead ${leadStr} ${contactStr} ${prog.amp.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz — ${tipo}]`;
+      setNotasLivres(prev => (prev ? prev + '
+' : '') + linha);
+    }
   };
 
   const desfazerMarcadoresConfig = (lado, config) => {
     if (lado === 'L') setMarcadoresClinicosL(prev => prev.filter(m => m.config !== config));
     else setMarcadoresClinicosR(prev => prev.filter(m => m.config !== config));
+  };
+
+  // Grupos com ao menos uma sessão ativa registrada
+  const gruposComSessao = useMemo(() => {
+    const ativos = sessions.filter(s => s.type === 'active');
+    if (ativos.length === 0) return [];
+    const ultima = ativos[0]; // sessions já ordenadas por data desc
+    return ['A','B','C','D'].filter(g => ultima.dadosGrupos?.[g]);
+  }, [sessions]);
+
+  const handleEfeitoGrupo = async (grupo, efeito, textoEfeito) => {
+    if (!user || !activePatient) return;
+    const ativos = sessions.filter(s => s.type === 'active');
+    if (ativos.length === 0) return;
+    const ultima = ativos[0];
+
+    // Gerar texto da programação do grupo (E e D)
+    const ordem = ORDEM_TEXTO_BAIXO_CIMA[ultima.tipoEletrodo || '4-ring'];
+    let progTexto = '';
+    ['L','R'].forEach(lado => {
+      const leadStr = lado === 'L' ? 'E' : 'D';
+      (ultima.dadosGrupos?.[grupo]?.[lado] || []).forEach((prog, idx) => {
+        const progs = ultima.dadosGrupos[grupo][lado];
+        const leadName = progs.length > 1 ? `Lead ${leadStr}${idx+1}` : `Lead ${leadStr}`;
+        const contactStr = ordem.map(c => {
+          const st = prog.contatos?.[c]?.state || 'off';
+          if (st === 'off') return '0';
+          const perc = prog.contatos[c].perc;
+          return perc < 100 ? `${st}(${perc}%)` : st;
+        }).join('');
+        progTexto += `${leadName} ${contactStr} ${prog.amp?.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz
+`;
+      });
+    });
+
+    // Salvar efeito em ambos os lados na última sessão
+    const novosDadosGrupos = JSON.parse(JSON.stringify(ultima.dadosGrupos));
+    ['L','R'].forEach(lado => {
+      (novosDadosGrupos[grupo]?.[lado] || []).forEach(prog => { prog.efeito = efeito; });
+    });
+    try {
+      await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'sessions', ultima.id), {
+        dadosGrupos: novosDadosGrupos
+      });
+    } catch(e) { console.error('Erro ao salvar efeito:', e); }
+
+    // Acrescentar texto na anotação
+    const linhaTexto = `
+--- Programação da última sessão ---
+Grupo ${grupo}:
+${progTexto}Avaliação: ${textoEfeito}
+`;
+    setNotasLivres(prev => (prev || '') + linhaTexto);
+    showToast(`Efeito do Grupo ${grupo} salvo: ${textoEfeito}`);
   };
 
   // --- FOTOS DE RECONSTRUÇÃO (Item 9) ---
@@ -1873,6 +1921,36 @@ export default function App() {
 
       <main className="p-4 w-full flex-1 flex flex-col gap-4 overflow-hidden">
         
+        {/* PAINEL EFEITO DE GRUPO — acima dos eletrodos */}
+        {gruposComSessao.length > 0 && (
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
+            <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 border-b pb-1">
+              Avaliação da Última Sessão — Efeito por Grupo
+            </h3>
+            <div className="flex flex-col gap-2">
+              {gruposComSessao.map(grupo => (
+                <div key={grupo} className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-black text-slate-700 w-12 shrink-0">Grupo {grupo}</span>
+                  {[
+                    ['bom',   'Melhor grupo',           'bg-emerald-500 hover:bg-emerald-600 text-white'],
+                    ['neutro','Bom / Mantido',           'bg-blue-500 hover:bg-blue-600 text-white'],
+                    ['pouco', 'Pouco efeito',            'bg-slate-400 hover:bg-slate-500 text-white'],
+                    ['ruim',  'Col. - Marcha',           'bg-rose-400 hover:bg-rose-500 text-white'],
+                    ['ruim',  'Col. - Fala',             'bg-rose-600 hover:bg-rose-700 text-white'],
+                    ['ruim',  'Col. - Outro',            'bg-rose-800 hover:bg-rose-900 text-white'],
+                  ].map(([efVal, label, cls]) => (
+                    <button
+                      key={label}
+                      onClick={() => handleEfeitoGrupo(grupo, efVal, label)}
+                      className={`px-2 py-1 rounded text-[10px] font-bold transition-all shadow-sm ${cls}`}
+                    >{label}</button>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* PARTE VISUAL - ELETRODOS */}
         <div className="flex overflow-x-auto gap-4 pb-2 items-stretch custom-scrollbar min-h-[500px]">
           
@@ -2280,7 +2358,7 @@ export default function App() {
 
       {/* FOOTER */}
       <footer className="text-center py-4 text-[10px] font-bold text-slate-400 tracking-wider">
-        Feito por Rafael Carra e Victor Maciel. Grupo de neuroengenharia HCFMUSP. Comentários e sugestões rafael.carra@hc.fm.usp.br.
+        Feito por Rafael Carra e Victor Maciel. Grupo de neuroengenharia HCFMUSP. Comentários e sugestões envie para rafael.carra@hc.fm.usp.br.
       </footer>
 
       <style dangerouslySetInnerHTML={{__html: `
