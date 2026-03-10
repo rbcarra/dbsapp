@@ -1483,8 +1483,7 @@ export default function App() {
         return perc < 100 ? `${st}(${perc}%)` : st;
       }).join('');
       const linha = `[Lead ${leadStr} ${contactStr} ${prog.amp.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz — ${tipo}]`;
-      setNotasLivres(prev => (prev ? prev + '
-' : '') + linha);
+      setNotasLivres(prev => (prev ? prev + '\n' : '') + linha);
     }
   };
 
