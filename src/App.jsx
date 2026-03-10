@@ -5,6 +5,7 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, addDoc, dele
 
 // Criado por Rafael Bernhart Carra em 2026 em um plantão longo no HC
 // Talvez mais de um plantão
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'dbs-logger-hcfmusp';
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
