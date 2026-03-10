@@ -4,14 +4,15 @@ import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, 
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, addDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 
 // Criado por Rafael Bernhart Carra em 2026 em um plantão longo no HC
+// Talvez mais de um plantão
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'dbs-logger-hcfmusp';
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+  apiKey: "AIzaSyBI2XyZi6otUlN8r7okaSDWFgUaQlREqT8",
+  authDomain: "dbs-logger-hcfmusp.firebaseapp.com",
+  projectId: "dbs-logger-hcfmusp",
+  storageBucket: "dbs-logger-hcfmusp.firebasestorage.app",
+  messagingSenderId: "700872334219",
+  appId: "1:700872334219:web:f373ec6927be01ca36ed8e"
 };
 
 const app = initializeApp(firebaseConfig);
@@ -34,7 +35,7 @@ const ORDEM_TEXTO_BAIXO_CIMA = {
 const MARCADOR_LETRAS = {
   // Colaterais — vermelho
   'Parestesia': { letra: 'P', cor: 'text-rose-700' },
-  'Contração Muscular': { letra: 'C', cor: 'text-rose-700' },
+  'Cápsula': { letra: 'C', cor: 'text-rose-700' },
   'Disartria': { letra: 'D', cor: 'text-rose-700' },
   'Outros': { letra: 'O', cor: 'text-rose-700' },
   // Positivos — verde
@@ -424,6 +425,27 @@ const VisualizadorEletrodo = ({ lado, tipoEletrodo, contatos, onChangeState, onC
 };
 
 const TimelineHistorico = ({ historicoRef, maxAmp, marcadores }) => {
+  const [timelineW, setTimelineW] = React.useState(null); // null = 100% natural
+  const dragRef = React.useRef(null);
+
+  const iniciarResize = (e) => {
+    e.preventDefault();
+    const container = dragRef.current?.parentElement;
+    if (!container) return;
+    const startX = e.clientX;
+    const startW = container.getBoundingClientRect().width;
+    const onMove = (ev) => {
+      const newW = Math.max(180, startW + (ev.clientX - startX));
+      setTimelineW(newW);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
   const historicoPorPW = useMemo(() => {
     const grupos = {};
     if (!historicoRef) return grupos;
@@ -457,7 +479,8 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores }) => {
   }
 
   return (
-    <div className="flex flex-col mb-1 bg-slate-50 border border-slate-200 rounded-t p-1 space-y-1">
+    <div style={{ width: timelineW ? `${timelineW}px` : '100%', position: 'relative' }}>
+    <div ref={dragRef} className="flex flex-col mb-1 bg-slate-50 border border-slate-200 rounded-t p-1 space-y-1">
       {/* Eixo X de amplitude */}
       <div className="relative w-full h-4 mx-0 pl-8 pr-1">
         {ampTicks.map((tick) => {
@@ -479,7 +502,21 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores }) => {
           if (!itemsByAmp[item.amp]) itemsByAmp[item.amp] = [];
           itemsByAmp[item.amp].push(item);
         });
-        const marcadoresDessePW = (marcadores || []).filter(m => String(m.pw) === pwStr);
+        // Filtrar marcadores: para cada par <0.2mA, manter apenas o mais recente;
+        // em caso de mesmo timestamp, priorizar efeito colateral sobre positivo
+        const marcadoresRaw = (marcadores || []).filter(m => String(m.pw) === pwStr);
+        const marcadoresDessePW = marcadoresRaw.filter((m, i) => {
+          return !marcadoresRaw.some((outro, j) => {
+            if (i === j) return false;
+            if (Math.abs((m.amp || 0) - (outro.amp || 0)) >= 0.2) return false;
+            const mIsPos = ['tremor','rigidez','bradicinesia'].includes(m.tipo);
+            const outroIsPos = ['tremor','rigidez','bradicinesia'].includes(outro.tipo);
+            // outro vence se: é mais recente, OU mesmo tempo mas m é positivo e outro é colateral
+            const outroMaisRecente = (outro.timestamp || 0) > (m.timestamp || 0);
+            const outroTemPrioridade = (outro.timestamp || 0) === (m.timestamp || 0) && mIsPos && !outroIsPos;
+            return outroMaisRecente || outroTemPrioridade;
+          });
+        });
         // Altura da linha = 64px (h-16). Indicadores (barras simples) têm h-9 = 36px, partindo do bottom-0.
         // Topo dos indicadores = 64 - 36 = 28px do bottom. Marcadores ficam 5px acima disso = 28 + 5 = 33px do bottom.
         const MARCADOR_BOTTOM = 33;
@@ -559,6 +596,15 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores }) => {
         );
       })}
     </div>
+    {/* Handle de resize horizontal */}
+    <div
+      onMouseDown={iniciarResize}
+      className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize flex items-center justify-center group"
+      title="Arraste para esticar a timeline"
+    >
+      <div className="w-0.5 h-6 bg-slate-300 group-hover:bg-indigo-400 rounded transition-colors" />
+    </div>
+    </div>
   );
 };
 
@@ -583,7 +629,7 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, is
 );
 
 const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, onUpdateProg, onUpdateState, onUpdatePerc, historicoRef, isMatchExato, marcadores, onAdicionarMarcador, onDesfazerMarcadores, cycling, onToggleCycling, impedancia, onImpedanciaChange, ignorarPerc }) => {
-  const listaColaterais = ["Parestesia", "Contração Muscular", "Disartria", "Outros"];
+  const listaColaterais = ["Parestesia", "Cápsula", "Disartria", "Outros"];
   const listaPositivos = ["tremor", "rigidez", "bradicinesia"];
   const configStr = getStringConfig(programa.contatos, ignorarPerc);
 
@@ -730,7 +776,7 @@ export default function App() {
   const [efeitosColaterais, setEfeitosColaterais] = useState({ L: [], R: [] });
   const [notasLivres, setNotasLivres] = useState("");
   const [resumoSessao, setResumoSessao] = useState("");
-  const listaEfeitos = ["Parestesia", "Contração Muscular", "Disartria", "Outros"];
+  const listaEfeitos = ["Parestesia", "Cápsula", "Disartria", "Outros"];
   const [textoProntuario, setTextoProntuario] = useState("");
   const [voltagemBateria, setVoltagemBateria] = useState("");
   const [impedanciaL, setImpedanciaL] = useState("");
@@ -748,7 +794,7 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState("");
   const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, sessionId: null, mode: 'soft' });
   const [showMonopolar, setShowMonopolar] = useState(false);
-  const [considerarAmplitude, setConsiderarAmplitude] = useState(true);
+  const [considerarAmplitude, setConsiderarAmplitude] = useState(false);
 
   useEffect(() => {
     const initAuth = async () => {
@@ -879,14 +925,13 @@ export default function App() {
         ['L', 'R'].forEach(lado => {
           (grupo[lado] || []).forEach(prog => {
             // Se considerarAmplitude=false, normalizar % para 100 antes de gerar config key
-            const contatosNorm = considerarAmplitude ? prog.contatos : Object.fromEntries(
-              Object.entries(prog.contatos).map(([k, v]) => [k, { ...v, perc: v.state !== 'off' ? 100 : v.perc }])
-            );
-            const config = getStringConfig(contatosNorm);
+            // ignorarPerc=true quando considerarAmplitude=false → key e config sem percentual
+            const ignorarP = !considerarAmplitude;
+            const config = getStringConfig(prog.contatos, ignorarP);
             if (config) {
               const key = `${lado}-${config}-${prog.amp}-${prog.pw}-${prog.freq}`;
               const newItem = {
-                lado, config: getStringConfig(contatosNorm), amp: prog.amp, pw: prog.pw, freq: prog.freq,
+                lado, config, amp: prog.amp, pw: prog.pw, freq: prog.freq,
                 efeito: prog.efeito || 'neutro', sessionId: sess.id,
                 date: sess.timestamp, grupo: nomeGrupo
               };
@@ -2041,8 +2086,20 @@ export default function App() {
         const maxAmpR = Math.max(0, ...todosR.map(m => m.amp || 0));
         const effectiveMax = Math.max(maxAmpL, maxAmpR, 4);
 
-        const renderMiniTimeline = (marcadores, config) => {
-          const filtrados = marcadores.filter(m => m.config === config);
+        const renderMiniTimeline = (marcadores, config, lado) => {
+          const filtradosRaw = marcadores.filter(m => m.config === config);
+          // Mesmo filtro de sobreposição: <0.2mA → manter só o mais recente/colateral
+          const filtrados = filtradosRaw.filter((m, i) => {
+            return !filtradosRaw.some((outro, j) => {
+              if (i === j) return false;
+              if (Math.abs((m.amp || 0) - (outro.amp || 0)) >= 0.2) return false;
+              const mIsPos = ['tremor','rigidez','bradicinesia'].includes(m.tipo);
+              const outroIsPos = ['tremor','rigidez','bradicinesia'].includes(outro.tipo);
+              const outroMaisRecente = (outro.timestamp || 0) > (m.timestamp || 0);
+              const outroTemPrioridade = (outro.timestamp || 0) === (m.timestamp || 0) && mIsPos && !outroIsPos;
+              return outroMaisRecente || outroTemPrioridade;
+            });
+          });
           if (filtrados.length === 0) return <div className="text-[10px] text-slate-300 italic px-2">sem dados</div>;
           const ticks = [];
           for (let v = 0; v <= effectiveMax; v += 0.5) ticks.push(v);
@@ -2062,7 +2119,7 @@ export default function App() {
                   <div key={mi}
                     className={`absolute w-5 h-5 rounded-full border ${corFundo} flex items-center justify-center`}
                     style={{ left: `calc(${leftPct}% + ${offsetX}px)`, top: '50%', transform: 'translateY(-50%)' }}
-                    title={`${m.tipo} | ${m.amp}mA | ${m.freq}Hz | PW:${m.pw}`}
+                    title={`${lado ? lado : ''}${config.match(/^([^-+]+)/)?.[1] || ''} | ${m.tipo} | ${m.amp}mA | ${m.freq}Hz | PW:${m.pw}`}
                   >
                     <span className={`text-[9px] font-black ${info.cor}`}>{info.letra}</span>
                   </div>
@@ -2109,10 +2166,14 @@ export default function App() {
                   {todasConfigs.map(config => (
                     <div key={config} className="grid items-center mb-2 px-1 py-1.5 rounded-lg hover:bg-slate-50" style={{ gridTemplateColumns: '80px 1fr 1fr', gap: '12px' }}>
                       <div className="text-[10px] font-mono font-bold text-slate-600 text-right pr-2 border-r border-slate-200">
-                        {config}
+                        {(() => {
+                          // Extrair contato ativo: ex "0-100" → "C0", "1A-100" → "C1A"
+                          const m = config.match(/^([^-+]+)/);
+                          return m ? `C${m[1]}` : config;
+                        })()}
                       </div>
-                      {renderMiniTimeline(todosL, config)}
-                      {renderMiniTimeline(todosR, config)}
+                      {renderMiniTimeline(todosL, config, 'L')}
+                      {renderMiniTimeline(todosR, config, 'R')}
                     </div>
                   ))}
                   <div className="mt-4 pt-3 border-t flex flex-wrap gap-3">
@@ -2218,7 +2279,7 @@ export default function App() {
 
       {/* FOOTER */}
       <footer className="text-center py-4 text-[10px] font-bold text-slate-400 tracking-wider">
-        Feito por Rafael Carra e Victor Maciel.
+        Feito por Rafael Carra e Victor Maciel. Grupo de neuroengenharia HCFMUSP. Comentários e sugestões rafael.carra@hc.fm.usp.br.
       </footer>
 
       <style dangerouslySetInnerHTML={{__html: `
