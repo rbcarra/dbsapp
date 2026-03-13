@@ -549,14 +549,14 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
                   const isMultiple = ampItems.length > 1;
 
                   return ampItems.map((h, i) => {
-                    const cor = h.efeito === 'bom' ? 'bg-emerald-400' : h.efeito === 'ruim' ? 'bg-rose-500' : 'bg-cyan-300';
-                    
+                    const cor = h.efeito === 'bom' ? 'bg-emerald-400' : h.efeito === 'ruim' ? 'bg-rose-500' : h.efeito === 'pouco' ? 'bg-slate-400' : 'bg-cyan-300';
+                    const opacidade = opacidadeMarcador(h.date || 0, sessaoAtualTimestamp || Date.now());                    
                     if (isMultiple) {
                       const bottomPos = (ampItems.length - 1 - i) * 14 + 2;
                       return (
                         <div key={`${ampStr}-${h.freq}`}
-                             className={`absolute w-3 h-3 rounded-full shadow-sm opacity-90 border border-white flex items-center justify-center ${cor} z-10`}
-                             style={{ left: `${leftPercent}%`, bottom: `${bottomPos}px`, transform: 'translateX(-50%)' }}
+                             className={`absolute w-3 h-3 rounded-full shadow-sm border border-white flex items-center justify-center ${cor} z-10`}
+                             style={{ left: `${leftPercent}%`, bottom: `${bottomPos}px`, transform: 'translateX(-50%)', opacity: opacidade }}
                              title={`${h.amp}mA | ${h.freq}Hz | ${h.efeito} | Sessão: ${formatarData(h.date)}`}
                         >
                           <span className="text-[7px] text-slate-800 font-bold" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', lineHeight: 1 }}>{h.freq}</span>
@@ -565,8 +565,8 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
                     } else {
                       return (
                         <div key={`${ampStr}-${h.freq}`}
-                          className={`absolute bottom-0 w-2.5 h-9 rounded-t shadow-sm opacity-90 flex items-start justify-center overflow-visible ${cor} z-10`}
-                          style={{ left: `${leftPercent}%`, transform: 'translateX(-50%)' }}
+                          className={`absolute bottom-0 w-2.5 h-9 rounded-t shadow-sm flex items-start justify-center overflow-visible ${cor} z-10`}
+                          style={{ left: `${leftPercent}%`, transform: 'translateX(-50%)', opacity: opacidade }}
                           title={`${h.amp}mA | ${h.freq}Hz | ${h.efeito} | Sessão: ${formatarData(h.date)}`}
                         >
                           <span className="text-[8px] text-slate-700 font-bold mt-0.5" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', lineHeight: 1 }}>{h.freq}Hz</span>
@@ -1968,8 +1968,7 @@ ${progTexto}Avaliação: ${textoEfeito}
                   <span className="text-xs font-black text-slate-700 w-12 shrink-0">Grupo {grupo}</span>
                   {[
                     ['bom',   'Melhor grupo',           'bg-emerald-500 hover:bg-emerald-600 text-white'],
-                    ['Bom / Mantido',                    'bg-blue-500 hover:bg-blue-600 text-white'],
-                    ['neutro',                           'bg-gray-500 hover:bg-blue-600 text-white'],
+                    ['neutro', 'Bom / Mantido',         'bg-blue-500 hover:bg-blue-600 text-white'],
                     ['pouco', 'Pouco efeito',            'bg-slate-400 hover:bg-slate-500 text-white'],
                     ['ruim',  'Col. - Marcha',           'bg-rose-400 hover:bg-rose-500 text-white'],
                     ['ruim',  'Col. - Fala',             'bg-rose-600 hover:bg-rose-700 text-white'],
