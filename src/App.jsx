@@ -430,7 +430,7 @@ const VisualizadorEletrodo = ({ lado, tipoEletrodo, contatos, onChangeState, onC
   );
 };
 
-const TimelineHistorico = ({ historicoRef, maxAmp, marcadores }) => {
+const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimestamp }) => {
   const [timelineW, setTimelineW] = React.useState(null); // null = 100% natural
   const dragRef = React.useRef(null);
 
@@ -589,7 +589,7 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores }) => {
                   const corBorda = isPositivo ? '5, 150, 105' : '225, 29, 72';
                   return (
                     <div key={`m-${mi}`}
-                      className={`absolute w-4 h-4 rounded-full border ${corFundo} z-0 flex items-center justify-center`}
+                      className="absolute w-4 h-4 rounded-full z-0 flex items-center justify-center"
                       style={{
                         left: `calc(${leftPercent}% + ${offsetX}px)`,
                         bottom: `${MARCADOR_BOTTOM}px`,
@@ -629,9 +629,9 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores }) => {
   );
 };
 
-const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, isAmplitude, historicoRef, marcadores }) => (
+const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, isAmplitude, historicoRef, marcadores, sessaoAtualTimestamp }) => (
   <div className="flex flex-col mb-3">
-    {isAmplitude && <TimelineHistorico historicoRef={historicoRef} maxAmp={max} marcadores={marcadores sessaoAtualTimestamp={historicoRef.current?.[0]?.timestamp || Date.now()} />}
+    {isAmplitude && <TimelineHistorico historicoRef={historicoRef} maxAmp={max} marcadores={marcadores} sessaoAtualTimestamp={sessaoAtualTimestamp} />}
     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1 mt-1">{label}</label>
     <div className="flex items-center gap-1.5">
       <button onClick={() => onChange(Math.max(min, Number((valor - step).toFixed(2))))} className="w-6 h-6 rounded bg-slate-200 hover:bg-slate-300 font-bold text-sm flex-shrink-0 flex items-center justify-center">-</button>
@@ -694,7 +694,7 @@ const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, o
         <div className="w-full flex flex-col justify-center flex-1">
           <ControleParametro 
             label="Amplitude" valor={programa.amp} unidade="mA" step={0.1} min={0} max={8}
-            onChange={(v) => onUpdateProg(lado, index, 'amp', v)} isAmplitude={true} historicoRef={historicoRef} marcadores={marcadores}
+            onChange={(v) => onUpdateProg(lado, index, 'amp', v)} isAmplitude={true} historicoRef={historicoRef} marcadores={marcadores} sessaoAtualTimestamp={historicoRef.current?.[0]?.timestamp || Date.now()}
           />
           <div className="flex flex-col mt-2">
             <ControleParametro label="Pulso" valor={programa.pw} unidade="µs" step={10} min={30} max={210} onChange={(v) => onUpdateProg(lado, index, 'pw', v)}/>
