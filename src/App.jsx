@@ -44,6 +44,12 @@ const MARCADOR_LETRAS = {
   'bradicinesia': { letra: 'B', cor: 'text-emerald-700' },
 };
 
+const opacidadeMarcador = (timestampMarcador, timestampSessaoAtual) => {
+  const meses = (timestampSessaoAtual - timestampMarcador) / (1000 * 60 * 60 * 24 * 30.44);
+  const reducao = Math.min(Math.floor(meses / 6) * 0.06, 0.60);
+  return Math.max(1 - reducao, 0.40);
+};
+
 const getContatosIniciais = (tipo) => {
   const contatos = {};
   TIPOS_ELETRODO[tipo].flat().forEach(k => contatos[k] = { state: 'off', perc: 100 });
@@ -576,18 +582,24 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores }) => {
                   const isPositivo = ['tremor','rigidez','bradicinesia'].includes(m.tipo);
                   const corFundo = isPositivo ? 'bg-emerald-100 border-emerald-300' : 'bg-rose-100 border-rose-300';
                   const info = MARCADOR_LETRAS[m.tipo] || { letra: '?', cor: isPositivo ? 'text-emerald-700' : 'text-rose-700' };
-                  // Múltiplos marcadores no mesmo amp deslocados horizontalmente
                   const sameAmpIdx = marcadoresDessePW.filter((mm, mmi) => mm.amp === m.amp && mmi < mi).length;
                   const offsetX = sameAmpIdx * 8 - (marcadoresDessePW.filter(mm => mm.amp === m.amp).length - 1) * 4;
+                  const opacidade = opacidadeMarcador(m.timestamp || 0, sessaoAtualTimestamp || Date.now());
+                  const corBase = isPositivo ? '16, 185, 129' : '244, 63, 94'; // emerald-400 / rose-400 em RGB
+                  const corBorda = isPositivo ? '5, 150, 105' : '225, 29, 72';
                   return (
                     <div key={`m-${mi}`}
                       className={`absolute w-4 h-4 rounded-full border ${corFundo} z-0 flex items-center justify-center`}
                       style={{
                         left: `calc(${leftPercent}% + ${offsetX}px)`,
                         bottom: `${MARCADOR_BOTTOM}px`,
+                        backgroundColor: `rgba(${corBase}, ${opacidade * 0.25})`,
+                        borderWidth: 1,
+                        borderStyle: 'solid',
+                        borderColor: `rgba(${corBorda}, ${opacidade})`,
                         transform: 'translateX(-50%)'
                       }}
-                      title={`${m.tipo} | ${m.amp}mA | ${m.freq}Hz`}
+                      title={`${m.tipo} | ${m.amp}mA | ${m.freq}Hz | ${Math.round(opacidade * 100)}%`}
                     >
                       <span className={`text-[8px] font-black leading-none ${info.cor}`}>{info.letra}</span>
                     </div>
@@ -619,7 +631,7 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores }) => {
 
 const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, isAmplitude, historicoRef, marcadores }) => (
   <div className="flex flex-col mb-3">
-    {isAmplitude && <TimelineHistorico historicoRef={historicoRef} maxAmp={max} marcadores={marcadores} />}
+    {isAmplitude && <TimelineHistorico historicoRef={historicoRef} maxAmp={max} marcadores={marcadores sessaoAtualTimestamp={historicoRef.current?.[0]?.timestamp || Date.now()} />}
     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1 mt-1">{label}</label>
     <div className="flex items-center gap-1.5">
       <button onClick={() => onChange(Math.max(min, Number((valor - step).toFixed(2))))} className="w-6 h-6 rounded bg-slate-200 hover:bg-slate-300 font-bold text-sm flex-shrink-0 flex items-center justify-center">-</button>
@@ -2032,7 +2044,7 @@ ${progTexto}Avaliação: ${textoEfeito}
 
           {/* Item 1: Resumo da sessão + notas + Item 7: voltagem */}
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4">
-            <div className="flex flex-col gap-3 w-full md:w-1/3">
+            <div className="flex flex-col gap-3 w-full md:w-1/4">
               <div>
                 <h3 className="text-xs font-bold text-slate-800 mb-1 uppercase tracking-wider border-b pb-1">Resumo da Sessão</h3>
                 <input
@@ -2055,12 +2067,12 @@ ${progTexto}Avaliação: ${textoEfeito}
                 />
               </div>
             </div>
-            <div className="flex flex-col w-full md:w-2/3">
+            <div className="flex flex-col w-full md:w-3/4">
               <h3 className="text-xs font-bold text-slate-800 mb-1 uppercase tracking-wider border-b pb-1">Anotação da Consulta</h3>
               <textarea 
                 value={notasLivres} onChange={(e) => setNotasLivres(e.target.value)}
-                placeholder="Descreva alterações de marcha, efeitos no humor, queixas do paciente..."
-                className="w-full flex-1 min-h-[140px] p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none text-slate-700 leading-relaxed"
+                placeholder="Cole ou registre aqui a evolução do paciente. Não é necessário descrever a programação."
+                className="w-full min-h-[180px] p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-y text-slate-700 leading-relaxed"
               />
               <div className="flex justify-end mt-2">
                 <button
