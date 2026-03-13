@@ -1211,7 +1211,19 @@ export default function App() {
             try {
               await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'sessions'), {
                 patientId: pacienteId,
-                timestamp: Date.now() - (linhasIdx.length - linhasIdx.indexOf(i)) * 1000,
+                timestamp: (() => {
+                    const dataStr = get(cols, 'Data');
+                    if (dataStr) {
+                      const m = dataStr.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
+                      if (m) {
+                        const [, d, mo, y] = m;
+                        const ano = y.length === 2 ? '20' + y : y;
+                        const parsed = new Date(`${ano}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`).getTime();
+                        if (!isNaN(parsed)) return parsed;
+                      }
+                    }
+                    return Date.now() - (linhasIdx.length - linhasIdx.indexOf(i)) * 1000;
+                  })(),
                 type: 'active',
                 tipoEletrodo: tipoEl,
                 dadosGrupos: dadosGruposImp,
@@ -1738,7 +1750,19 @@ ${progTexto}Avaliação: ${textoEfeito}
       try {
         await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'sessions'), {
           patientId: activePatient.id,
-          timestamp: Date.now() - (linhas.length - i) * 1000,
+          timestamp: (() => {
+              const dataStr = get(cols, 'Data');
+              if (dataStr) {
+                const m = dataStr.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
+                if (m) {
+                  const [, d, mo, y] = m;
+                  const ano = y.length === 2 ? '20' + y : y;
+                  const parsed = new Date(`${ano}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`).getTime();
+                  if (!isNaN(parsed)) return parsed;
+                }
+              }
+              return Date.now() - (linhasIdx.length - linhasIdx.indexOf(i)) * 1000;
+            })(),
           type: 'active',
           tipoEletrodo: tipoEl,
           dadosGrupos: dadosGruposImp,
