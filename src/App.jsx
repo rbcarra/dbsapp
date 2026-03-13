@@ -1968,7 +1968,8 @@ ${progTexto}Avaliação: ${textoEfeito}
                   <span className="text-xs font-black text-slate-700 w-12 shrink-0">Grupo {grupo}</span>
                   {[
                     ['bom',   'Melhor grupo',           'bg-emerald-500 hover:bg-emerald-600 text-white'],
-                    ['neutro','Bom / Mantido',           'bg-blue-500 hover:bg-blue-600 text-white'],
+                    ['Bom / Mantido',                    'bg-blue-500 hover:bg-blue-600 text-white'],
+                    ['neutro',                           'bg-gray-500 hover:bg-blue-600 text-white'],
                     ['pouco', 'Pouco efeito',            'bg-slate-400 hover:bg-slate-500 text-white'],
                     ['ruim',  'Col. - Marcha',           'bg-rose-400 hover:bg-rose-500 text-white'],
                     ['ruim',  'Col. - Fala',             'bg-rose-600 hover:bg-rose-700 text-white'],
