@@ -802,7 +802,7 @@ export default function App() {
     progAnterior: true,
     progAtual: true,
     prontuario: true,
-    reconstrucao: false,
+    reconstrucao: true,
     importExport: false,
   });
   const toggleBloco = (bloco) => setBlocosAbertos(prev => ({ ...prev, [bloco]: !prev[bloco] }));
@@ -2289,11 +2289,10 @@ ${progTexto}Avaliação: ${textoEfeito}
                 const corFundo = isPos ? 'bg-emerald-100 border-emerald-300' : 'bg-rose-100 border-rose-300';
                 const leftPct = Math.min(98, (m.amp / effectiveMax) * 100);
                 const sameAmpIdx = filtrados.filter((mm, mmi) => mm.amp === m.amp && mmi < mi).length;
-                const offsetX = sameAmpIdx * 8;
                 return (
                   <div key={mi}
                     className={`absolute w-5 h-5 rounded-full border ${corFundo} flex items-center justify-center`}
-                    style={{ left: `calc(${leftPct}% + ${offsetX}px)`, top: '50%', transform: 'translateY(-50%)' }}
+                    style={{ left: `calc(${leftPct}%`, top: '50%', transform: 'translateY(-50%)' }}
                     title={`${lado ? lado : ''}${config.match(/^([^-+]+)/)?.[1] || ''} | ${m.tipo} | ${m.amp}mA | ${m.freq}Hz | PW:${m.pw}`}
                   >
                     <span className={`text-[9px] font-black ${info.cor}`}>{info.letra}</span>
