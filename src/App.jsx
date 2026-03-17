@@ -535,13 +535,13 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
             const mIsPos = ['tremor','rigidez','bradicinesia'].includes(m.tipo);
             const outroIsPos = ['tremor','rigidez','bradicinesia'].includes(outro.tipo);
             // outro vence se: é mais recente, OU mesmo tempo mas m é positivo e outro é colateral
-            const outroMaisRecente = (outro.timestamp || 0) > (m.timestamp || 0);
-            const outroTemPrioridade = (outro.timestamp || 0) === (m.timestamp || 0) && mIsPos && !outroIsPos;
+            const tsM     = m.timestamp     || m.sessionTimestamp     || 0;
+            const tsOutro = outro.timestamp || outro.sessionTimestamp || 0;
+            const outroMaisRecente    = tsOutro > tsM;
+            const outroTemPrioridade  = tsOutro === tsM && mIsPos && !outroIsPos;
             return outroMaisRecente || outroTemPrioridade;
           });
         });
-        // Altura da linha = 64px (h-16). Indicadores (barras simples) têm h-9 = 36px, partindo do bottom-0.
-        // Topo dos indicadores = 64 - 36 = 28px do bottom. Marcadores ficam 5px acima disso = 28 + 5 = 33px do bottom.
         const MARCADOR_BOTTOM = 33;
 
         return (
@@ -2268,8 +2268,10 @@ ${progTexto}Avaliação: ${textoEfeito}
               if (Math.abs((m.amp || 0) - (outro.amp || 0)) >= 0.2) return false;
               const mIsPos = ['tremor','rigidez','bradicinesia'].includes(m.tipo);
               const outroIsPos = ['tremor','rigidez','bradicinesia'].includes(outro.tipo);
-              const outroMaisRecente = (outro.timestamp || 0) > (m.timestamp || 0);
-              const outroTemPrioridade = (outro.timestamp || 0) === (m.timestamp || 0) && mIsPos && !outroIsPos;
+              const tsM     = m.timestamp     || m.sessionTimestamp     || 0;
+              const tsOutro = outro.timestamp || outro.sessionTimestamp || 0;
+              const outroMaisRecente    = tsOutro > tsM;
+              const outroTemPrioridade  = tsOutro === tsM && mIsPos && !outroIsPos;
               return outroMaisRecente || outroTemPrioridade;
             });
           });
