@@ -1390,6 +1390,9 @@ export default function App() {
         const docRef = await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'sessions'), sessionData);
         if (!modoAtualizar) setEditingSessionId(null);
         showToast("Nova sessão registrada!");
+        setEditingSessionId(docRef.id); 
+        } else {
+}
       }
       
       await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'temp_sessions', activePatient.id)).catch(() => {});
