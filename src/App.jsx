@@ -74,6 +74,19 @@ const formatarData = (timestamp) => {
 
 // --- COMPONENTES AUXILIARES ---
 
+const BlocoColapsavel = ({ titulo, aberto, onToggle, children, corHeader = 'bg-slate-50' }) => (
+  <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+    <button
+      onClick={onToggle}
+      className={`w-full flex items-center justify-between px-4 py-2.5 ${corHeader} border-b border-slate-200 hover:bg-slate-100 transition-colors`}
+    >
+      <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">{titulo}</span>
+      <span className="text-slate-400 text-sm">{aberto ? '▲' : '▼'}</span>
+    </button>
+    {aberto && <div className="p-4">{children}</div>}
+  </div>
+);
+
 const LoginModal = ({ onLoginSuccess }) => {
   const [isLoginMode, setIsLoginMode] = useState(true);
   const [email, setEmail] = useState('');
@@ -785,6 +798,14 @@ export default function App() {
   const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, sessionId: null, mode: 'soft' });
   const [showMonopolar, setShowMonopolar] = useState(false);
   const [considerarAmplitude, setConsiderarAmplitude] = useState(false);
+  const [blocosAbertos, setBlocosAbertos] = useState({
+    progAnterior: true,
+    progAtual: true,
+    prontuario: true,
+    reconstrucao: false,
+    importExport: false,
+  });
+  const toggleBloco = (bloco) => setBlocosAbertos(prev => ({ ...prev, [bloco]: !prev[bloco] }));
 
   useEffect(() => {
     const initAuth = async () => {
@@ -1388,11 +1409,8 @@ export default function App() {
         showToast(modoAtualizar ? "Sessão atualizada!" : "Sessão atualizada com sucesso!");
       } else {
         const docRef = await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'sessions'), sessionData);
-        if (!modoAtualizar) setEditingSessionId(null);
+        setEditingSessionId(docRef.id);
         showToast("Nova sessão registrada!");
-        setEditingSessionId(docRef.id); 
-        } else {
-}
       }
       
       await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'temp_sessions', activePatient.id)).catch(() => {});
@@ -1525,7 +1543,13 @@ export default function App() {
     const ativos = sessions.filter(s => s.type === 'active');
     if (ativos.length === 0) return [];
     const ultima = ativos[0]; // sessions já ordenadas por data desc
-    return ['A','B','C','D'].filter(g => ultima.dadosGrupos?.[g]);
+    return ['A','B','C','D'].filter(g => {
+      const gd = ultima.dadosGrupos?.[g];
+      if (!gd) return false;
+      const lAtivo = (gd.L || []).some(p => (p.amp || 0) > 0);
+      const rAtivo = (gd.R || []).some(p => (p.amp || 0) > 0);
+      return lAtivo && rAtivo;
+    });
   }, [sessions]);
 
   const handleEfeitoGrupo = async (grupo, efeito, textoEfeito) => {
@@ -1892,30 +1916,6 @@ ${progTexto}Avaliação: ${textoEfeito}
         </div>
         
         <div className="flex items-center space-x-3 flex-shrink-0">
-          
-          <button
-             onClick={handleCopiarUltimaSessao}
-             disabled={!sessions.some(s => s.type === 'active')}
-             className="px-3 py-1.5 rounded text-[10px] font-bold text-slate-900 bg-slate-200 hover:bg-slate-300 disabled:opacity-30 transition-colors shadow-sm hidden sm:flex items-center uppercase"
-          >
-             Copiar Anterior
-          </button>
-
-          <div className="flex items-center bg-indigo-900 rounded px-2 py-1.5 border border-indigo-700">
-            <span className="text-[10px] uppercase tracking-wider text-indigo-300 mr-2">Grupo:</span>
-            <select value={grupoAtivo} onChange={(e) => setGrupoAtivo(e.target.value)} className="bg-white text-slate-900 font-bold text-sm focus:outline-none cursor-pointer rounded px-1 py-0.5">
-              {['A', 'B', 'C', 'D'].map(g => <option key={g} value={g}>{g}</option>)}
-            </select>
-          </div>
-
-          <div className="flex items-center bg-slate-800 rounded px-2 py-1.5 shrink-0">
-            <span className="text-[10px] uppercase tracking-wider text-slate-400 mr-2 hidden lg:inline">Copiar p/:</span>
-            <span className="text-[10px] uppercase tracking-wider text-slate-400 mr-1 lg:hidden">Copiar:</span>
-            <select value="" onChange={(e) => copiarParaGrupo(e.target.value)} className="bg-white text-slate-900 font-bold text-sm focus:outline-none cursor-pointer rounded px-1 py-0.5 w-12">
-              <option value="">--</option>
-              {['A', 'B', 'C', 'D'].filter(g => g !== grupoAtivo).map(g => <option key={g} value={g}>{g}</option>)}
-            </select>
-          </div>
 
           <div className="flex items-center bg-slate-800 rounded px-2 py-1.5 hidden md:flex">
             <span className="text-[10px] uppercase tracking-wider text-slate-400 mr-2">Eletrodo:</span>
@@ -1958,232 +1958,288 @@ ${progTexto}Avaliação: ${textoEfeito}
         </div>
       )}
 
-      <main className="p-4 w-full flex-1 flex flex-col gap-4 overflow-hidden">
-        
-        {/* PAINEL EFEITO DE GRUPO — acima dos eletrodos */}
-        {gruposComSessao.length > 0 && (
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
-            <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 border-b pb-1">
-              Avaliação da Última Sessão — Efeito por Grupo
-            </h3>
-            <div className="flex flex-col gap-2">
-              {gruposComSessao.map(grupo => (
-                <div key={grupo} className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs font-black text-slate-700 w-12 shrink-0">Grupo {grupo}</span>
-                  {[
-                    ['bom',   'Melhor grupo',           'bg-emerald-500 hover:bg-emerald-600 text-white'],
-                    ['neutro', 'Bom / Mantido',         'bg-blue-500 hover:bg-blue-600 text-white'],
-                    ['pouco', 'Pouco efeito',            'bg-slate-400 hover:bg-slate-500 text-white'],
-                    ['ruim',  'Col. - Marcha',           'bg-rose-400 hover:bg-rose-500 text-white'],
-                    ['ruim',  'Col. - Fala',             'bg-rose-600 hover:bg-rose-700 text-white'],
-                    ['ruim',  'Col. - Outro',            'bg-rose-800 hover:bg-rose-900 text-white'],
-                  ].map(([efVal, label, cls]) => (
-                    <button
-                      key={label}
-                      onClick={() => handleEfeitoGrupo(grupo, efVal, label)}
-                      className={`px-2 py-1 rounded text-[10px] font-bold transition-all shadow-sm ${cls}`}
-                    >{label}</button>
-                  ))}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+      <main className="p-4 w-full flex-1 flex flex-col gap-3 overflow-y-auto">
 
-        {/* PARTE VISUAL - ELETRODOS */}
-        <div className="flex overflow-x-auto gap-4 pb-2 items-stretch custom-scrollbar min-h-[500px]">
-          
-          {/* HEMISFÉRIO ESQUERDO */}
-          <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col shrink-0">
-            <div className="flex justify-between items-center mb-3 px-2 border-b pb-2">
-              <h2 className="font-bold text-slate-700">Hemisfério Esquerdo</h2>
-              <button onClick={() => toggleInterleaving('L')} className={`text-xs font-bold px-3 py-1 rounded-full transition-colors ml-4 ${programasL.length > 1 ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
-                {programasL.length > 1 ? 'Desativar Interleaving' : '+ Ativar Interleaving'}
-              </button>
-            </div>
-            <div className="flex gap-4 flex-1">
-              {programasL.map((prog, idx) => {
-                const configStr = getStringConfig(prog.contatos, !considerarAmplitude);
-                const hist = configStr ? historicoReal.filter(h => h.lado === 'L' && h.config === configStr) : [];
-                const isMatch = historicoReal.some(h => h.lado === 'L' && h.config === configStr && h.amp === prog.amp && h.pw === prog.pw && h.freq === prog.freq);
-                const marcadoresSessaoL = marcadoresClinicosL.filter(m => m.config === configStr);
-                const marcadoresHistL = marcadoresHistoricos.L.filter(m => m.config === configStr && !marcadoresClinicosL.some(mc => mc.id === m.id));
-                return (
-                  <div key={`L-${idx}`} className="w-[340px] shrink-0">
-                    <RenderPrograma 
-                      lado="L" programa={prog} index={idx} isInterleaving={programasL.length > 1} tipoEletrodo={tipoEletrodo}
-                      isMatchExato={isMatch} historicoRef={hist}
-                      marcadores={[...marcadoresSessaoL, ...marcadoresHistL]}
-                      onAdicionarMarcador={(tipo) => adicionarMarcadorClinico('L', tipo, idx)}
-                      onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('L', cfg)}
-                      cycling={cyclingL}
-                      onToggleCycling={() => setCyclingL(v => !v)}
-                      impedancia={impedanciaL}
-                      onImpedanciaChange={setImpedanciaL}
-                      onUpdateProg={atualizarPrograma} onUpdateState={atualizarContatoState} onUpdatePerc={atualizarContatoPerc}
-                      ignorarPerc={!considerarAmplitude}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* HEMISFÉRIO DIREITO */}
-          <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col shrink-0">
-            <div className="flex justify-between items-center mb-3 px-2 border-b pb-2">
-              <h2 className="font-bold text-slate-700">Hemisfério Direito</h2>
-              <button onClick={() => toggleInterleaving('R')} className={`text-xs font-bold px-3 py-1 rounded-full transition-colors ml-4 ${programasR.length > 1 ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
-                {programasR.length > 1 ? 'Desativar Interleaving' : '+ Ativar Interleaving'}
-              </button>
-            </div>
-            <div className="flex gap-4 flex-1">
-              {programasR.map((prog, idx) => {
-                const configStr = getStringConfig(prog.contatos, !considerarAmplitude);
-                const hist = configStr ? historicoReal.filter(h => h.lado === 'R' && h.config === configStr) : [];
-                const isMatch = historicoReal.some(h => h.lado === 'R' && h.config === configStr && h.amp === prog.amp && h.pw === prog.pw && h.freq === prog.freq);
-                const marcadoresSessaoR = marcadoresClinicosR.filter(m => m.config === configStr);
-                const marcadoresHistR = marcadoresHistoricos.R.filter(m => m.config === configStr && !marcadoresClinicosR.some(mc => mc.id === m.id));
-                return (
-                  <div key={`R-${idx}`} className="w-[340px] shrink-0">
-                    <RenderPrograma 
-                      lado="R" programa={prog} index={idx} isInterleaving={programasR.length > 1} tipoEletrodo={tipoEletrodo}
-                      isMatchExato={isMatch} historicoRef={hist}
-                      marcadores={[...marcadoresSessaoR, ...marcadoresHistR]}
-                      onAdicionarMarcador={(tipo) => adicionarMarcadorClinico('R', tipo, idx)}
-                      onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('R', cfg)}
-                      cycling={cyclingR}
-                      onToggleCycling={() => setCyclingR(v => !v)}
-                      impedancia={impedanciaR}
-                      onImpedanciaChange={setImpedanciaR}
-                      onUpdateProg={atualizarPrograma} onUpdateState={atualizarContatoState} onUpdatePerc={atualizarContatoPerc}
-                      ignorarPerc={!considerarAmplitude}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-        </div>
-
-        {/* ÁREA CLÍNICA E NOTAS */}
-        <div className="flex flex-col gap-4 flex-none mt-2 mb-4">
-
-          {/* Item 1: Resumo da sessão + notas + Item 7: voltagem */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4">
-            <div className="flex flex-col gap-3 w-full md:w-1/4">
-              <div>
-                <h3 className="text-xs font-bold text-slate-800 mb-1 uppercase tracking-wider border-b pb-1">Resumo da Sessão</h3>
-                <input
-                  type="text"
-                  value={resumoSessao}
-                  onChange={e => setResumoSessao(e.target.value)}
-                  placeholder="Resumo breve (aparece no histórico)"
-                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700"
-                />
-              </div>
-              {/* Item 7: Voltagem bateria */}
-              <div>
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Voltagem da Bateria</label>
-                <input
-                  type="text"
-                  value={voltagemBateria}
-                  onChange={e => setVoltagemBateria(e.target.value)}
-                  placeholder="Ex: 2.74 V"
-                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono text-slate-700"
-                />
-              </div>
-            </div>
-            <div className="flex flex-col w-full md:w-3/4">
-              <h3 className="text-xs font-bold text-slate-800 mb-1 uppercase tracking-wider border-b pb-1">Anotação da Consulta</h3>
-              <textarea 
-                value={notasLivres} onChange={(e) => setNotasLivres(e.target.value)}
-                placeholder="Cole ou registre aqui a evolução do paciente. Não é necessário descrever a programação."
-                className="w-full min-h-[180px] p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-y text-slate-700 leading-relaxed"
-              />
-              <div className="flex justify-end mt-2">
-                <button
-                  onClick={copiarConsultaClipboard}
-                  className="flex items-center gap-1.5 text-xs bg-slate-700 hover:bg-slate-900 text-white px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm"
-                  title="Copia cabeçalho, evolução e programação atual para colar no prontuário"
-                >
-                  📋 Copiar Consulta
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Item 9: Fotos de reconstrução por paciente */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-            <div className="flex justify-between items-center mb-3 border-b pb-2">
-              <div>
-                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Reconstrução do Eletrodo</h3>
-                <p className="text-[10px] text-slate-500 mt-0.5">Imagens salvas por paciente. Serão redimensionadas para máx. 360×360 px.</p>
-              </div>
-              <button onClick={salvarFotos} className="text-xs bg-indigo-600 text-white hover:bg-indigo-700 px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm">Salvar Fotos</button>
-            </div>
-            <div className="flex gap-6 flex-wrap">
-              {[['L', 'Hemisfério Esquerdo', fotoRecL, setFotoRecL], ['R', 'Hemisfério Direito', fotoRecR, setFotoRecR]].map(([lado, label, foto, setFoto]) => (
-                <div key={lado} className="flex flex-col items-center gap-2">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase">{label}</span>
-                  {foto ? (
-                    <div className="relative group">
-                      <img src={foto} alt={label} className="w-40 h-40 object-cover rounded-lg border border-slate-200 shadow-sm" />
-                      <button onClick={() => setFoto(null)} className="absolute top-1 right-1 bg-rose-500 text-white text-[10px] rounded-full w-5 h-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity font-bold">✕</button>
+        {/* BLOCO: PROGRAMAÇÃO ANTERIOR */}
+        <BlocoColapsavel
+          titulo="Programação Anterior"
+          aberto={blocosAbertos.progAnterior}
+          onToggle={() => toggleBloco('progAnterior')}
+          corHeader="bg-indigo-50"
+        >
+          {gruposComSessao.length === 0 ? (
+            <p className="text-xs text-slate-400 italic">Nenhuma sessão anterior com programação ativa registrada.</p>
+          ) : (() => {
+            const ultima = sessions.filter(s => s.type === 'active')[0];
+            const ordem = ORDEM_TEXTO_BAIXO_CIMA[ultima.tipoEletrodo || '4-ring'];
+            return (
+              <div className="flex flex-col gap-3">
+                {gruposComSessao.map(grupo => {
+                  let linhasGrupo = [];
+                  ['L','R'].forEach(lado => {
+                    const leadStr = lado === 'L' ? 'E' : 'D';
+                    (ultima.dadosGrupos?.[grupo]?.[lado] || []).forEach((prog, idx) => {
+                      const progs = ultima.dadosGrupos[grupo][lado];
+                      const leadName = progs.length > 1 ? `Lead ${leadStr}${idx+1}` : `Lead ${leadStr}`;
+                      const contactStr = ordem.map(c => {
+                        const st = prog.contatos?.[c]?.state || 'off';
+                        if (st === 'off') return '0';
+                        const perc = prog.contatos[c].perc;
+                        return perc < 100 ? `${st}(${perc}%)` : st;
+                      }).join('');
+                      linhasGrupo.push(`${leadName} ${contactStr} ${prog.amp?.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz`);
+                    });
+                  });
+                  return (
+                    <div key={grupo} className="flex flex-col sm:flex-row sm:items-start gap-2 p-2 rounded-lg bg-slate-50 border border-slate-100">
+                      <div className="shrink-0">
+                        <span className="text-xs font-black text-slate-700 block mb-1.5">Grupo {grupo}</span>
+                        <div className="flex flex-wrap gap-1">
+                          {[
+                            ['bom',    'Melhor grupo',  'bg-emerald-500 hover:bg-emerald-600 text-white'],
+                            ['neutro', 'Bom / Mantido', 'bg-blue-500 hover:bg-blue-600 text-white'],
+                            ['pouco',  'Pouco efeito',  'bg-slate-400 hover:bg-slate-500 text-white'],
+                            ['ruim',   'Col. - Marcha', 'bg-rose-400 hover:bg-rose-500 text-white'],
+                            ['ruim',   'Col. - Fala',   'bg-rose-600 hover:bg-rose-700 text-white'],
+                            ['ruim',   'Col. - Outro',  'bg-rose-800 hover:bg-rose-900 text-white'],
+                          ].map(([efVal, label, cls]) => (
+                            <button key={label} onClick={() => handleEfeitoGrupo(grupo, efVal, label)}
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all shadow-sm ${cls}`}>
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <pre className="text-[10px] font-mono text-slate-500 leading-relaxed whitespace-pre-wrap flex-1 pl-0 sm:pl-3 sm:border-l border-slate-200">
+                        {linhasGrupo.join('\n')}
+                      </pre>
                     </div>
-                  ) : (
-                    <label className="w-40 h-40 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50 transition-colors">
-                      <span className="text-2xl text-slate-300">📷</span>
-                      <span className="text-[10px] text-slate-400 mt-1">Anexar JPG</span>
-                      <input type="file" accept="image/jpeg,image/png" className="hidden" onChange={e => e.target.files?.[0] && handleFotoRec(lado, e.target.files[0])} />
-                    </label>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Item 11: Exportar / Importar */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-            <div className="flex justify-between items-center mb-3 border-b pb-2">
-              <div>
-                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Exportar / Importar Histórico</h3>
-                <p className="text-[10px] text-slate-500 mt-0.5">Arquivo CSV com todas as sessões ativas do paciente. Uma linha por sessão.</p>
+                  );
+                })}
               </div>
-              <div className="flex gap-2">
-                <button onClick={exportarHistoricoCSV} className="text-xs bg-emerald-600 text-white hover:bg-emerald-700 px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm">⬇ Exportar CSV</button>
-                <label className="text-xs bg-indigo-600 text-white hover:bg-indigo-700 px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm cursor-pointer">
-                  ⬆ Importar CSV
-                  <input type="file" accept=".csv" className="hidden" onChange={e => e.target.files?.[0] && importarHistoricoCSV(e.target.files[0])} />
-                </label>
-              </div>
-            </div>
-          </div>
+            );
+          })()}
+        </BlocoColapsavel>
 
-        </div>
-
-        {/* PRONTUÁRIO (TEXTO SIMPLES) */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex-none mb-4">
-          <div className="flex justify-between items-center mb-3 border-b pb-2">
-            <div>
-              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Integração com Prontuário</h3>
-              <p className="text-[10px] text-slate-500 mt-0.5">Copie o texto para o seu prontuário ou cole um texto no mesmo formato para importar a programação.</p>
+        {/* BLOCO: PROGRAMAÇÃO ATUAL */}
+        <BlocoColapsavel
+          titulo="Programação Atual"
+          aberto={blocosAbertos.progAtual}
+          onToggle={() => toggleBloco('progAtual')}
+          corHeader="bg-indigo-50"
+        >
+          {/* Controles de grupo e cópia — movidos do header */}
+          <div className="flex flex-wrap items-center gap-2 mb-3 pb-3 border-b border-slate-100">
+            <div className="flex items-center bg-slate-100 rounded px-2 py-1.5 border border-slate-200">
+              <span className="text-[10px] uppercase tracking-wider text-slate-500 mr-2">Grupo:</span>
+              <select value={grupoAtivo} onChange={(e) => setGrupoAtivo(e.target.value)}
+                className="bg-white text-slate-900 font-bold text-sm focus:outline-none cursor-pointer rounded px-1 py-0.5 border border-slate-200">
+                {['A', 'B', 'C', 'D'].map(g => <option key={g} value={g}>{g}</option>)}
+              </select>
             </div>
-            <button 
-              onClick={aplicarProntuario} 
-              className="text-xs bg-indigo-600 text-white hover:bg-indigo-700 px-4 py-2 rounded-lg font-bold transition-all shadow-sm flex items-center gap-2"
+            <div className="flex items-center bg-slate-100 rounded px-2 py-1.5 border border-slate-200">
+              <span className="text-[10px] uppercase tracking-wider text-slate-500 mr-2">Copiar p/:</span>
+              <select value="" onChange={(e) => copiarParaGrupo(e.target.value)}
+                className="bg-white text-slate-900 font-bold text-sm focus:outline-none cursor-pointer rounded px-1 py-0.5 border border-slate-200 w-12">
+                <option value="">--</option>
+                {['A', 'B', 'C', 'D'].filter(g => g !== grupoAtivo).map(g => <option key={g} value={g}>{g}</option>)}
+              </select>
+            </div>
+            <button
+              onClick={handleCopiarUltimaSessao}
+              disabled={!sessions.some(s => s.type === 'active')}
+              className="px-3 py-1.5 rounded text-[10px] font-bold text-slate-900 bg-slate-200 hover:bg-slate-300 disabled:opacity-30 transition-colors shadow-sm uppercase"
             >
-              <span>Ler Texto e Aplicar</span>
+              Copiar Anterior
             </button>
           </div>
+
+          {/* Eletrodos */}
+          <div className="flex overflow-x-auto gap-4 pb-2 items-stretch custom-scrollbar min-h-[500px]">
+            {/* HEMISFÉRIO ESQUERDO */}
+            <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col shrink-0">
+              <div className="flex justify-between items-center mb-3 px-2 border-b pb-2">
+                <h2 className="font-bold text-slate-700">Hemisfério Esquerdo</h2>
+                <button onClick={() => toggleInterleaving('L')} className={`text-xs font-bold px-3 py-1 rounded-full transition-colors ml-4 ${programasL.length > 1 ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                  {programasL.length > 1 ? 'Desativar Interleaving' : '+ Ativar Interleaving'}
+                </button>
+              </div>
+              <div className="flex gap-4 flex-1">
+                {programasL.map((prog, idx) => {
+                  const configStr = getStringConfig(prog.contatos, !considerarAmplitude);
+                  const hist = configStr ? historicoReal.filter(h => h.lado === 'L' && h.config === configStr) : [];
+                  const isMatch = historicoReal.some(h => h.lado === 'L' && h.config === configStr && h.amp === prog.amp && h.pw === prog.pw && h.freq === prog.freq);
+                  const marcadoresSessaoL = marcadoresClinicosL.filter(m => m.config === configStr);
+                  const marcadoresHistL = marcadoresHistoricos.L.filter(m => m.config === configStr && !marcadoresClinicosL.some(mc => mc.id === m.id));
+                  return (
+                    <div key={`L-${idx}`} className="w-[340px] shrink-0">
+                      <RenderPrograma
+                        lado="L" programa={prog} index={idx} isInterleaving={programasL.length > 1} tipoEletrodo={tipoEletrodo}
+                        isMatchExato={isMatch} historicoRef={hist}
+                        marcadores={[...marcadoresSessaoL, ...marcadoresHistL]}
+                        onAdicionarMarcador={(tipo) => adicionarMarcadorClinico('L', tipo, idx)}
+                        onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('L', cfg)}
+                        cycling={cyclingL} onToggleCycling={() => setCyclingL(v => !v)}
+                        impedancia={impedanciaL} onImpedanciaChange={setImpedanciaL}
+                        onUpdateProg={atualizarPrograma} onUpdateState={atualizarContatoState} onUpdatePerc={atualizarContatoPerc}
+                        ignorarPerc={!considerarAmplitude}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* HEMISFÉRIO DIREITO */}
+            <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col shrink-0">
+              <div className="flex justify-between items-center mb-3 px-2 border-b pb-2">
+                <h2 className="font-bold text-slate-700">Hemisfério Direito</h2>
+                <button onClick={() => toggleInterleaving('R')} className={`text-xs font-bold px-3 py-1 rounded-full transition-colors ml-4 ${programasR.length > 1 ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                  {programasR.length > 1 ? 'Desativar Interleaving' : '+ Ativar Interleaving'}
+                </button>
+              </div>
+              <div className="flex gap-4 flex-1">
+                {programasR.map((prog, idx) => {
+                  const configStr = getStringConfig(prog.contatos, !considerarAmplitude);
+                  const hist = configStr ? historicoReal.filter(h => h.lado === 'R' && h.config === configStr) : [];
+                  const isMatch = historicoReal.some(h => h.lado === 'R' && h.config === configStr && h.amp === prog.amp && h.pw === prog.pw && h.freq === prog.freq);
+                  const marcadoresSessaoR = marcadoresClinicosR.filter(m => m.config === configStr);
+                  const marcadoresHistR = marcadoresHistoricos.R.filter(m => m.config === configStr && !marcadoresClinicosR.some(mc => mc.id === m.id));
+                  return (
+                    <div key={`R-${idx}`} className="w-[340px] shrink-0">
+                      <RenderPrograma
+                        lado="R" programa={prog} index={idx} isInterleaving={programasR.length > 1} tipoEletrodo={tipoEletrodo}
+                        isMatchExato={isMatch} historicoRef={hist}
+                        marcadores={[...marcadoresSessaoR, ...marcadoresHistR]}
+                        onAdicionarMarcador={(tipo) => adicionarMarcadorClinico('R', tipo, idx)}
+                        onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('R', cfg)}
+                        cycling={cyclingR} onToggleCycling={() => setCyclingR(v => !v)}
+                        impedancia={impedanciaR} onImpedanciaChange={setImpedanciaR}
+                        onUpdateProg={atualizarPrograma} onUpdateState={atualizarContatoState} onUpdatePerc={atualizarContatoPerc}
+                        ignorarPerc={!considerarAmplitude}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </BlocoColapsavel>
+
+        {/* BLOCO: PRONTUÁRIO */}
+        <BlocoColapsavel
+          titulo="Prontuário"
+          aberto={blocosAbertos.prontuario}
+          onToggle={() => toggleBloco('prontuario')}
+        >
+          <div className="flex flex-wrap gap-3 mb-3">
+            <div className="flex-1 min-w-[200px]">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Resumo da Sessão</label>
+              <input type="text" value={resumoSessao} onChange={e => setResumoSessao(e.target.value)}
+                placeholder="Resumo breve (aparece no histórico)"
+                className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700" />
+            </div>
+            <div className="w-40 shrink-0">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Voltagem da Bateria</label>
+              <input type="text" value={voltagemBateria} onChange={e => setVoltagemBateria(e.target.value)}
+                placeholder="Ex: 2.74 V"
+                className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono text-slate-700" />
+            </div>
+          </div>
+          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Anotação da Consulta</label>
           <textarea
-            value={textoProntuario}
-            onChange={(e) => setTextoProntuario(e.target.value)}
-            className="w-full h-48 p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono resize-y text-slate-700 whitespace-pre"
-            spellCheck="false"
+            value={notasLivres}
+            onChange={(e) => {
+              setNotasLivres(e.target.value);
+              e.target.style.height = 'auto';
+              e.target.style.height = e.target.scrollHeight + 'px';
+            }}
+            onFocus={(e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }}
+            placeholder="Cole ou registre aqui a evolução do paciente. Não é necessário descrever a programação."
+            rows={6}
+            className="w-full p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none text-slate-700 leading-relaxed overflow-hidden"
           />
-        </div>
+          <div className="flex justify-end mt-2">
+            <button onClick={copiarConsultaClipboard}
+              className="flex items-center gap-1.5 text-xs bg-slate-700 hover:bg-slate-900 text-white px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm"
+              title="Copia cabeçalho, evolução e programação atual para colar no prontuário">
+              📋 Copiar Consulta
+            </button>
+          </div>
+        </BlocoColapsavel>
+
+        {/* BLOCO: RECONSTRUÇÃO */}
+        <BlocoColapsavel
+          titulo="Reconstrução do Eletrodo"
+          aberto={blocosAbertos.reconstrucao}
+          onToggle={() => toggleBloco('reconstrucao')}
+        >
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-[10px] text-slate-500">Imagens salvas por paciente. Serão redimensionadas para máx. 360×360 px.</p>
+            <button onClick={salvarFotos} className="text-xs bg-indigo-600 text-white hover:bg-indigo-700 px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm">Salvar Fotos</button>
+          </div>
+          <div className="flex gap-6 flex-wrap">
+            {[['L', 'Hemisfério Esquerdo', fotoRecL, setFotoRecL], ['R', 'Hemisfério Direito', fotoRecR, setFotoRecR]].map(([lado, label, foto, setFoto]) => (
+              <div key={lado} className="flex flex-col items-center gap-2">
+                <span className="text-[10px] font-bold text-slate-500 uppercase">{label}</span>
+                {foto ? (
+                  <div className="relative group">
+                    <img src={foto} alt={label} className="w-40 h-40 object-cover rounded-lg border border-slate-200 shadow-sm" />
+                    <button onClick={() => setFoto(null)} className="absolute top-1 right-1 bg-rose-500 text-white text-[10px] rounded-full w-5 h-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity font-bold">✕</button>
+                  </div>
+                ) : (
+                  <label className="w-40 h-40 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50 transition-colors">
+                    <span className="text-2xl text-slate-300">📷</span>
+                    <span className="text-[10px] text-slate-400 mt-1">Anexar JPG</span>
+                    <input type="file" accept="image/jpeg,image/png" className="hidden" onChange={e => e.target.files?.[0] && handleFotoRec(lado, e.target.files[0])} />
+                  </label>
+                )}
+              </div>
+            ))}
+          </div>
+        </BlocoColapsavel>
+
+        {/* BLOCO: IMPORTAÇÃO / EXPORTAÇÃO */}
+        <BlocoColapsavel
+          titulo="Importação / Exportação"
+          aberto={blocosAbertos.importExport}
+          onToggle={() => toggleBloco('importExport')}
+        >
+          <div className="flex flex-col gap-4">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <p className="text-xs font-bold text-slate-700">Histórico CSV</p>
+                  <p className="text-[10px] text-slate-500">Todas as sessões ativas. Uma linha por sessão.</p>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={exportarHistoricoCSV} className="text-xs bg-emerald-600 text-white hover:bg-emerald-700 px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm">⬇ Exportar CSV</button>
+                  <label className="text-xs bg-indigo-600 text-white hover:bg-indigo-700 px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm cursor-pointer">
+                    ⬆ Importar CSV
+                    <input type="file" accept=".csv" className="hidden" onChange={e => e.target.files?.[0] && importarHistoricoCSV(e.target.files[0])} />
+                  </label>
+                </div>
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <p className="text-xs font-bold text-slate-700">Integração com Prontuário</p>
+                  <p className="text-[10px] text-slate-500">Cole um texto no formato DBS para importar a programação.</p>
+                </div>
+                <button onClick={aplicarProntuario} className="text-xs bg-indigo-600 text-white hover:bg-indigo-700 px-4 py-2 rounded-lg font-bold transition-all shadow-sm">
+                  Ler Texto e Aplicar
+                </button>
+              </div>
+              <textarea
+                value={textoProntuario}
+                onChange={(e) => setTextoProntuario(e.target.value)}
+                className="w-full h-48 p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono resize-y text-slate-700 whitespace-pre"
+                spellCheck="false"
+              />
+            </div>
+          </div>
+        </BlocoColapsavel>
 
       </main>
 
@@ -2206,7 +2262,6 @@ ${progTexto}Avaliação: ${textoEfeito}
 
         const renderMiniTimeline = (marcadores, config, lado) => {
           const filtradosRaw = marcadores.filter(m => m.config === config);
-          // Mesmo filtro de sobreposição: <0.2mA → manter só o mais recente/colateral
           const filtrados = filtradosRaw.filter((m, i) => {
             return !filtradosRaw.some((outro, j) => {
               if (i === j) return false;
@@ -2397,7 +2452,7 @@ ${progTexto}Avaliação: ${textoEfeito}
 
       {/* FOOTER */}
       <footer className="text-center py-4 text-[10px] font-bold text-slate-400 tracking-wider">
-        Feito por Rafael Carra e Victor Maciel. Grupo de neuroengenharia HCFMUSP. Comentários e sugestões envie para rafael.carra@hc.fm.usp.br.
+        Feito por Rafael Carra. Grupo de neuroengenharia HCFMUSP. Comentários e sugestões envie para rafael.carra@hc.fm.usp.br.
       </footer>
 
       <style dangerouslySetInnerHTML={{__html: `
