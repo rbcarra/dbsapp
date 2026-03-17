@@ -963,7 +963,7 @@ export default function App() {
   const gerarTextoProntuario = (grupos, eletrodo) => {
     let text = '';
     const ordem = ORDEM_TEXTO_BAIXO_CIMA[eletrodo];
-
+    
     ['A', 'B', 'C', 'D'].forEach(g => {
       text += `Grupo ${g}:\n`;
       ['L', 'R'].forEach(lado => {
@@ -979,8 +979,9 @@ export default function App() {
             if (perc < 100) return `${st}(${perc}%)`;
             return st;
           }).join('');
-          
-          text += `${leadName} ${contactStr} ${prog.amp.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz\n`;
+          if ((prog.amp || 0) > 0) {
+            text += `${leadName} ${contactStr} ${prog.amp.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz\n`;
+          }
         });
       });
       text += '\n';
