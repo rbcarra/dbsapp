@@ -196,70 +196,6 @@ const PatientSelector = ({ patients, onSelectPatient, onCreatePatient, onDeleteP
     }
   };
 
-const handleParseImportCSV = async (file) => {
-  if (!user || !file) return 'Erro: usuário não autenticado.';
-  try {
-    const text = await file.text();
-    const clean = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    const linhas = clean.split('\n').map(l => l.trim()).filter(Boolean);
-    if (linhas.length < 2) return 'Arquivo inválido ou vazio.';
-
-    const primeiraLinha = linhas[0];
-    const sep = (primeiraLinha.match(/;/g)||[]).length > (primeiraLinha.match(/,/g)||[]).length ? ';' : ',';
-    const parseLine = (linha) => {
-      const res = []; let cur = ''; let inQ = false;
-      for (const c of linha) {
-        if (c === '"') { inQ = !inQ; }
-        else if (c === sep && !inQ) { res.push(cur.trim()); cur = ''; }
-        else { cur += c; }
-      }
-      res.push(cur.trim()); return res;
-    };
-
-    const cabecalho = parseLine(primeiraLinha);
-    const getH = (cols, nome) => {
-      const idx = cabecalho.map(h => h.toLowerCase().replace(/[^a-z]/g,'')).findIndex(h => h.includes(nome));
-      return idx >= 0 ? cols[idx] || '' : '';
-    };
-    const temColunasSessao = cabecalho.some(c => c.includes('Eletrodo') || c.includes('GrupoA'));
-
-    const pacientesPorHc = {};
-    for (let i = 1; i < linhas.length; i++) {
-      const cols = parseLine(linhas[i]);
-      const nome = getH(cols, 'nome');
-      const hc = getH(cols, 'hc') || getH(cols, 'registro');
-      if (!nome || !hc) continue;
-      if (!pacientesPorHc[hc]) pacientesPorHc[hc] = { nome, linhasIdx: [] };
-      pacientesPorHc[hc].linhasIdx.push(i);
-    }
-
-    const hcsUnicos = Object.keys(pacientesPorHc);
-    if (hcsUnicos.length === 0) return 'Nenhum paciente válido encontrado.';
-
-    return {
-      temSessoes: temColunasSessao,
-      pacientes: hcsUnicos.map(hc => ({
-        hc,
-        nome: pacientesPorHc[hc].nome,
-        nSessoes: pacientesPorHc[hc].linhasIdx.length,
-        linhasIdx: pacientesPorHc[hc].linhasIdx,
-      })),
-      _linhas: linhas,
-      _sep: sep,
-      _cabecalho: cabecalho,
-    };
-  } catch(err) {
-    return 'Erro ao analisar CSV.';
-  }
-};
-
-// handleImportFullCSV: agora recebe o preview em vez do file
-const handleImportFullCSV = async (preview) => {
-  if (!user || !preview) return 'Erro: dados inválidos.';
-  // ... lógica de escrita igual à anterior, mas usando
-  // preview.pacientes, preview._linhas, preview._sep, preview._cabecalho
-  // em vez de reler o arquivo
-};
 
   const handleImportCSV = async (file) => {
     if (!file) return;
@@ -1251,6 +1187,174 @@ export default function App() {
     } catch(err) {
       console.error(err);
       showToast("Erro ao cadastrar paciente.");
+    }
+  };
+
+  // Fase 1: só lê e analisa o CSV, sem escrever nada no Firestore
+  const handleParseImportCSV = async (file) => {
+    if (!user || !file) return 'Erro: usuário não autenticado.';
+    try {
+      const text = await file.text();
+      const clean = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      const linhas = clean.split('\n').map(l => l.trim()).filter(Boolean);
+      if (linhas.length < 2) return 'Arquivo inválido ou vazio.';
+
+      const primeiraLinha = linhas[0];
+      const sep = (primeiraLinha.match(/;/g)||[]).length > (primeiraLinha.match(/,/g)||[]).length ? ';' : ',';
+      const parseLine = (linha) => {
+        const res = []; let cur = ''; let inQ = false;
+        for (const c of linha) {
+          if (c === '"') { inQ = !inQ; }
+          else if (c === sep && !inQ) { res.push(cur.trim()); cur = ''; }
+          else { cur += c; }
+        }
+        res.push(cur.trim()); return res;
+      };
+
+      const cabecalho = parseLine(primeiraLinha);
+      const getH = (cols, nome) => {
+        const idx = cabecalho.map(h => h.toLowerCase().replace(/[^a-z]/g,'')).findIndex(h => h.includes(nome));
+        return idx >= 0 ? cols[idx] || '' : '';
+      };
+      const temColunasSessao = cabecalho.some(c => c.includes('Eletrodo') || c.includes('GrupoA'));
+
+      const pacientesPorHc = {};
+      for (let i = 1; i < linhas.length; i++) {
+        const cols = parseLine(linhas[i]);
+        const nome = getH(cols, 'nome');
+        const hc = getH(cols, 'hc') || getH(cols, 'registro');
+        if (!nome || !hc) continue;
+        if (!pacientesPorHc[hc]) pacientesPorHc[hc] = { nome, linhasIdx: [] };
+        pacientesPorHc[hc].linhasIdx.push(i);
+      }
+
+      const hcsUnicos = Object.keys(pacientesPorHc);
+      if (hcsUnicos.length === 0) return 'Nenhum paciente válido encontrado. CSV precisa ter colunas "Nome" e "HC".';
+
+      return {
+        temSessoes: temColunasSessao,
+        pacientes: hcsUnicos.map(hc => ({
+          hc,
+          nome: pacientesPorHc[hc].nome,
+          nSessoes: pacientesPorHc[hc].linhasIdx.length,
+          linhasIdx: pacientesPorHc[hc].linhasIdx,
+        })),
+        _linhas: linhas,
+        _sep: sep,
+        _cabecalho: cabecalho,
+      };
+    } catch(err) {
+      console.error(err);
+      return 'Erro ao analisar CSV.';
+    }
+  };
+
+  // Fase 2: recebe o preview aprovado e escreve no Firestore
+  const handleImportFullCSV = async (preview) => {
+    if (!user || !preview) return 'Erro: dados inválidos.';
+    try {
+      const { temSessoes, pacientes, _linhas, _sep, _cabecalho } = preview;
+
+      const parseLine = (linha) => {
+        const res = []; let cur = ''; let inQ = false;
+        for (const c of linha) {
+          if (c === '"') { inQ = !inQ; }
+          else if (c === _sep && !inQ) { res.push(cur.trim()); cur = ''; }
+          else { cur += c; }
+        }
+        res.push(cur.trim()); return res;
+      };
+      const get = (cols, nome) => { const idx = _cabecalho.indexOf(nome); return idx >= 0 ? cols[idx] || '' : ''; };
+
+      let pacientesCriados = 0;
+      let sessoesImportadas = 0;
+
+      for (const { hc, nome, linhasIdx } of pacientes) {
+        let pacienteId = patients.find(p => (p.hc || '').trim() === hc.trim())?.id;
+
+        if (!pacienteId) {
+          const docRef = await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'patients'), {
+            nome, hc, createdAt: Date.now()
+          });
+          pacienteId = docRef.id;
+          pacientesCriados++;
+        }
+
+        if (temSessoes) {
+          for (const i of linhasIdx) {
+            const cols = parseLine(_linhas[i]);
+            const tipoEl = get(cols, 'Eletrodo') || '4-ring';
+            const gruposKeys = ['A', 'B', 'C', 'D'];
+            const dadosGruposImp = {};
+            gruposKeys.forEach(g => {
+              dadosGruposImp[g] = { L: [], R: [] };
+              [['L','E'], ['R','D']].forEach(([l, ladoNome]) => {
+                const contStr = get(cols, `Grupo${g}_Lead${ladoNome}_Contatos`);
+                const amp = parseFloat(get(cols, `Grupo${g}_Lead${ladoNome}_Amp(mA)`)) || 0;
+                const pw = parseInt(get(cols, `Grupo${g}_Lead${ladoNome}_PW(us)`)) || 60;
+                const freq = parseInt(get(cols, `Grupo${g}_Lead${ladoNome}_Freq(Hz)`)) || 130;
+                const efeito = get(cols, `Grupo${g}_Lead${ladoNome}_Efeito`) || 'neutro';
+                const contatos = getContatosIniciais(tipoEl);
+                const ordem = ORDEM_TEXTO_BAIXO_CIMA[tipoEl];
+                if (contStr) {
+                  const tokens = [...contStr.matchAll(/(0|\+|-)(?:\((\d+)%\))?/g)];
+                  if (tokens.length === ordem.length) {
+                    for (let ti = 0; ti < tokens.length; ti++) {
+                      const st = tokens[ti][1]; const perc = tokens[ti][2];
+                      if (st === '-' || st === '+') {
+                        contatos[ordem[ti]].state = st;
+                        contatos[ordem[ti]].perc = perc ? parseInt(perc) : 100;
+                      }
+                    }
+                  }
+                }
+                dadosGruposImp[g][l].push({ contatos, amp, pw, freq, efeito });
+              });
+            });
+            const ecLStr = get(cols, 'EfeitosColateraisE');
+            const ecRStr = get(cols, 'EfeitosColateraisD');
+            try {
+              await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'sessions'), {
+                patientId: pacienteId,
+                timestamp: (() => {
+                  const dataStr = get(cols, 'Data');
+                  if (dataStr) {
+                    const m = dataStr.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
+                    if (m) {
+                      const [, d, mo, y] = m;
+                      const ano = y.length === 2 ? '20' + y : y;
+                      const parsed = new Date(`${ano}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`).getTime();
+                      if (!isNaN(parsed)) return parsed;
+                    }
+                  }
+                  return Date.now() - (linhasIdx.length - linhasIdx.indexOf(i)) * 1000;
+                })(),
+                type: 'active',
+                tipoEletrodo: tipoEl,
+                dadosGrupos: dadosGruposImp,
+                clinica: { tremor: 0, rigidez: 0, bradicinesia: 0 },
+                efeitosColaterais: { L: ecLStr ? ecLStr.split(';').filter(Boolean) : [], R: ecRStr ? ecRStr.split(';').filter(Boolean) : [] },
+                notasLivres: get(cols, 'NotasLivres'),
+                resumoSessao: get(cols, 'Resumo'),
+                voltagemBateria: get(cols, 'Bateria(V)'),
+                impedanciaL: get(cols, 'ImpedanciaE'),
+                impedanciaR: get(cols, 'ImpedanciaD'),
+                cyclingL: get(cols, 'CyclingE') === 'Sim',
+                cyclingR: get(cols, 'CyclingD') === 'Sim',
+                marcadoresClinicosL: [], marcadoresClinicosR: []
+              });
+              sessoesImportadas++;
+            } catch(e) { console.error(e); }
+          }
+        }
+      }
+
+      return temSessoes
+        ? `${pacientesCriados} paciente(s) criado(s), ${sessoesImportadas} sessão(ões) importada(s).`
+        : `${pacientesCriados} paciente(s) importado(s).`;
+    } catch(err) {
+      console.error(err);
+      return 'Erro ao importar CSV.';
     }
   };
 
