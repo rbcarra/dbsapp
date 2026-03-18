@@ -1254,7 +1254,6 @@ export default function App() {
     }
   };
 
-
   const handleDeletePatient = async (paciente) => {
     if (!user || !paciente) return;
     try {
