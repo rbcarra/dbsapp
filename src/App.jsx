@@ -174,13 +174,13 @@ const LoginModal = ({ onLoginSuccess }) => {
     </div>
   );
 };
-
-const PatientSelector = ({ patients, onSelectPatient, onCreatePatient, onDeletePatient, onImportFullCSV }) => {
+const PatientSelector = ({ patients, onSelectPatient, onCreatePatient, onDeletePatient, onImportFullCSV, onParseImportCSV }) => {
+  const [importFeedback, setImportFeedback] = useState('');
+  const [importPreview, setImportPreview] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [newName, setNewName] = useState('');
   const [newHc, setNewHc] = useState('');
-  const [confirmDelete, setConfirmDelete] = useState(null); // paciente a apagar
-  const [importFeedback, setImportFeedback] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(null);
 
   const filteredPatients = patients.filter(p => 
     (p.nome || '').toLowerCase().includes((searchTerm || '').toLowerCase()) || 
@@ -196,10 +196,89 @@ const PatientSelector = ({ patients, onSelectPatient, onCreatePatient, onDeleteP
     }
   };
 
+const handleParseImportCSV = async (file) => {
+  if (!user || !file) return 'Erro: usuário não autenticado.';
+  try {
+    const text = await file.text();
+    const clean = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const linhas = clean.split('\n').map(l => l.trim()).filter(Boolean);
+    if (linhas.length < 2) return 'Arquivo inválido ou vazio.';
+
+    const primeiraLinha = linhas[0];
+    const sep = (primeiraLinha.match(/;/g)||[]).length > (primeiraLinha.match(/,/g)||[]).length ? ';' : ',';
+    const parseLine = (linha) => {
+      const res = []; let cur = ''; let inQ = false;
+      for (const c of linha) {
+        if (c === '"') { inQ = !inQ; }
+        else if (c === sep && !inQ) { res.push(cur.trim()); cur = ''; }
+        else { cur += c; }
+      }
+      res.push(cur.trim()); return res;
+    };
+
+    const cabecalho = parseLine(primeiraLinha);
+    const getH = (cols, nome) => {
+      const idx = cabecalho.map(h => h.toLowerCase().replace(/[^a-z]/g,'')).findIndex(h => h.includes(nome));
+      return idx >= 0 ? cols[idx] || '' : '';
+    };
+    const temColunasSessao = cabecalho.some(c => c.includes('Eletrodo') || c.includes('GrupoA'));
+
+    const pacientesPorHc = {};
+    for (let i = 1; i < linhas.length; i++) {
+      const cols = parseLine(linhas[i]);
+      const nome = getH(cols, 'nome');
+      const hc = getH(cols, 'hc') || getH(cols, 'registro');
+      if (!nome || !hc) continue;
+      if (!pacientesPorHc[hc]) pacientesPorHc[hc] = { nome, linhasIdx: [] };
+      pacientesPorHc[hc].linhasIdx.push(i);
+    }
+
+    const hcsUnicos = Object.keys(pacientesPorHc);
+    if (hcsUnicos.length === 0) return 'Nenhum paciente válido encontrado.';
+
+    return {
+      temSessoes: temColunasSessao,
+      pacientes: hcsUnicos.map(hc => ({
+        hc,
+        nome: pacientesPorHc[hc].nome,
+        nSessoes: pacientesPorHc[hc].linhasIdx.length,
+        linhasIdx: pacientesPorHc[hc].linhasIdx,
+      })),
+      _linhas: linhas,
+      _sep: sep,
+      _cabecalho: cabecalho,
+    };
+  } catch(err) {
+    return 'Erro ao analisar CSV.';
+  }
+};
+
+// handleImportFullCSV: agora recebe o preview em vez do file
+const handleImportFullCSV = async (preview) => {
+  if (!user || !preview) return 'Erro: dados inválidos.';
+  // ... lógica de escrita igual à anterior, mas usando
+  // preview.pacientes, preview._linhas, preview._sep, preview._cabecalho
+  // em vez de reler o arquivo
+};
+
   const handleImportCSV = async (file) => {
     if (!file) return;
+    setImportFeedback('Analisando arquivo...');
+    const preview = await onParseImportCSV(file);
+    setImportFeedback('');
+    if (typeof preview === 'string') {
+      setImportFeedback(preview);
+      setTimeout(() => setImportFeedback(''), 5000);
+    } else {
+      setImportPreview(preview);
+    }
+  };
+
+  const handleConfirmarImport = async () => {
+    const previewParaImportar = importPreview;
+    setImportPreview(null);
     setImportFeedback('Importando...');
-    const resultado = await onImportFullCSV(file);
+    const resultado = await onImportFullCSV(previewParaImportar);
     setImportFeedback(resultado);
     setTimeout(() => setImportFeedback(''), 5000);
   };
@@ -223,7 +302,46 @@ const PatientSelector = ({ patients, onSelectPatient, onCreatePatient, onDeleteP
           </div>
         </div>
       )}
-
+{importPreview && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+    <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-5 flex flex-col max-h-[80vh]">
+      <h3 className="text-sm font-bold text-slate-800 mb-1">Confirmar Importação</h3>
+      <p className="text-xs text-slate-500 mb-3">
+        {importPreview.temSessoes
+          ? `${importPreview.pacientes.length} paciente(s) reconhecido(s) com as seguintes sessões:`
+          : `${importPreview.pacientes.length} paciente(s) reconhecido(s) (sem colunas de sessão).`}
+      </p>
+      <div className="overflow-y-auto flex-1 mb-4 border border-slate-100 rounded-lg divide-y divide-slate-100">
+        {importPreview.pacientes.map((p, i) => (
+          <div key={i} className="flex items-center justify-between px-3 py-2 hover:bg-slate-50">
+            <div>
+              <span className="text-xs font-bold text-slate-700">{p.nome}</span>
+              <span className="text-[10px] text-slate-400 ml-2">HC: {p.hc}</span>
+              {patients.some(ex => (ex.hc||'').trim() === p.hc.trim()) && (
+                <span className="text-[9px] text-amber-600 font-bold ml-2 bg-amber-50 px-1.5 py-0.5 rounded">já cadastrado</span>
+              )}
+            </div>
+            {importPreview.temSessoes && (
+              <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
+                {p.nSessoes} sessão(ões)
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-end gap-2 shrink-0">
+        <button onClick={() => setImportPreview(null)}
+          className="px-4 py-1.5 rounded text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200">
+          Cancelar
+        </button>
+        <button onClick={handleConfirmarImport}
+          className="px-4 py-1.5 rounded text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700">
+          Confirmar Importação
+        </button>
+      </div>
+    </div>
+  </div>
+)}
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl overflow-hidden flex flex-col md:flex-row min-h-[500px]">
         <div className="w-full md:w-3/5 bg-slate-50 p-6 flex flex-col border-r border-slate-200">
           <div className="flex justify-between items-start mb-1">
@@ -1867,7 +1985,7 @@ ${progTexto}Avaliação: ${textoEfeito}
     return (
       <>
         {showLoginModal && <LoginModal onLoginSuccess={() => setShowLoginModal(false)} />}
-        <PatientSelector patients={patients} onSelectPatient={setActivePatient} onCreatePatient={handleCreatePatient} onDeletePatient={handleDeletePatient} onImportFullCSV={handleImportFullCSV} />
+        <PatientSelector patients={patients} onSelectPatient={setActivePatient} onCreatePatient={handleCreatePatient} onDeletePatient={handleDeletePatient} onImportFullCSV={handleImportFullCSV} onParseImportCSV={handleParseImportCSV} />
         <button onClick={handleLogout} className="fixed bottom-4 right-4 text-xs font-bold text-slate-400 hover:text-rose-500 bg-white px-3 py-1.5 rounded shadow-sm">
           Sair da Conta
         </button>
