@@ -72,7 +72,6 @@ const formatarData = (timestamp) => {
 };
 
 
-// --- COMPONENTES AUXILIARES ---
 
 const BlocoColapsavel = ({ titulo, aberto, onToggle, children, corHeader = 'bg-slate-50' }) => (
   <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
@@ -496,19 +495,15 @@ const VisualizadorEletrodo = ({ lado, tipoEletrodo, contatos, onChangeState, onC
     </div>
   );
 };
-// ─── DIRECTIONAL STIM HELPERS ──────────────────────────────────────────────
 
-// Ângulos padrão A/B/C (convenção matemática: 0=direita, 90=cima)
+
 const DIR_ANGLES = { A: 90, B: 210, C: 330 };
 
-// Extrai o nível direcional de uma config string: "1A-60,1B-40" → "1"
 const getDirLevel = (configStr) => {
   const m = (configStr || '').match(/(\d)[ABC]/);
   return m ? m[1] : null;
 };
 
-// Reconstrói contatos a partir da config string para computar vetores
-// "1A-60,1B-40" → { "1A": {state:"-", perc:60}, "1B": {state:"-", perc:40} }
 const parseConfigToContatos = (configStr) => {
   if (!configStr) return {};
   const contatos = {};
@@ -531,13 +526,14 @@ const classifyStim = (contatos, tipoEletrodo) => {
 
   if (levels.length === 1) {
     const lv = levels[0];
-    const active = ['A','B','C']
-      .map(x => contatos[lv + x])
-      .filter(c => c && c.state !== 'off');
-    if (active.length < 2) return 'ring';
-    const firstPerc = active[0].perc ?? 100;
-    const allSame = active.every(c => (c.perc ?? 100) === firstPerc);
-    return allSame ? 'ring' : 'single-dir';
+    const allThree = ['A','B','C'].map(x => contatos[lv + x]);
+    const allActive = allThree.every(c => c && c.state !== 'off');
+    if (allActive) {
+      const percs = allThree.map(c => c.perc ?? 100);
+      const allSame = percs.every(p => p === percs[0]);
+      if (allSame) return 'ring';
+    }
+    return 'single-dir';
   }
   return 'multi-dir';
 };
@@ -548,106 +544,135 @@ const dirUnitVector2D = (contatos) => {
   let vx = 0, vy = 0;
   for (const [letter, deg] of Object.entries(DIR_ANGLES)) {
     const key = Object.keys(contatos).find(k => k.endsWith(letter));
-    if (!key || contatos[key].state === 'off') continue;
+    if (!key || !contatos[key] || contatos[key].state === 'off') continue;
     const c = contatos[key];
-    const perc = (c.perc ?? 100) / 100;
+    const perc = (c.perc ?? 100) / 100; 
     const rad = deg * Math.PI / 180;
-    const sign = c.state === '-' ? -1 : 1;
+    const sign = c.state === '+' ? 1 : -1;
     vx += sign * perc * Math.cos(rad);
     vy += sign * perc * Math.sin(rad);
   }
   const mag = Math.sqrt(vx * vx + vy * vy) || 1;
-  return { ux: vx / mag, uy: vy / mag, rawMag: Math.sqrt(vx*vx+vy*vy) };
+  return { ux: vx / mag, uy: vy / mag, rawMag: Math.sqrt(vx*vx + vy*vy) };
+};
+const getContactZ = (key) => {
+  const num = parseInt(key[0]);
+  return num; // 0, 1, 2 ou 3
 };
 
-// Vetor 3D: XY = direção direcional, Z = contribuição por nível
+
 const dirVector3D = (contatos, amp) => {
   const { ux, uy } = dirUnitVector2D(contatos);
-  const activeDir = Object.entries(contatos)
-    .filter(([k, v]) => v.state !== 'off' && /\d[ABC]$/.test(k));
-  let zNet = 0, wTot = 0;
-  activeDir.forEach(([k, v]) => {
-    const level = parseInt(k[0]);
+
+  let zWeighted = 0, totalPerc = 0;
+  Object.entries(contatos).forEach(([k, v]) => {
+    if (v.state === 'off') return;
     const perc = (v.perc ?? 100) / 100;
-    const sign = v.state === '-' ? -1 : 1;
-    zNet += sign * perc * level;
-    wTot += perc;
+    const z = getContactZ(k);          // posição 0-3
+    const sign = v.state === '+' ? 1 : -1; // FIX 1
+    zWeighted += sign * perc * z;
+    totalPerc += perc;
   });
-  const uz = wTot > 0 ? zNet / wTot : 0;
+
+  const uz = totalPerc > 0 ? zWeighted / totalPerc : 0;
   const mag3 = Math.sqrt(ux*ux + uy*uy + uz*uz) || 1;
+
   return { ux: ux/mag3, uy: uy/mag3, uz: uz/mag3, amp };
 };
+
 const PolarDisplay2D = ({ marcadores, maxAmp, pw, sessaoAtualTimestamp }) => {
   const S = 160, C = S / 2, margin = 20, R = C - margin;
   const toR = (amp) => (Math.min(amp, maxAmp) / Math.max(maxAmp, 0.1)) * R;
-  const rings = [0.25, 0.5, 0.75, 1.0];
+  const rings = [];
+    for (let v = 1; v <= Math.ceil(maxAmp); v++) rings.push(v);
 
   return (
     <div className="flex flex-col items-center gap-0.5">
       <span className="text-[8px] text-slate-500 font-mono">PW {pw}µs</span>
       <svg width={S} height={S} style={{ background: '#0f172a', borderRadius: 6 }}>
         {/* Grid rings */}
-        {rings.map((f, i) => (
-          <circle key={i} cx={C} cy={C} r={toR(maxAmp * f)}
-            fill="none" stroke={i === 3 ? '#334155' : '#1e293b'}
-            strokeWidth={i === 3 ? 1 : 0.5}
-            strokeDasharray={i < 3 ? '2,3' : undefined} />
-        ))}
-        {/* Amplitude label */}
-        <text x={C + 3} y={C - toR(maxAmp) + 8} fontSize={6} fill="#475569">
-          {maxAmp.toFixed(1)}mA
-        </text>
+        {rings.map(v => {
+          const isMain = v === Math.floor(maxAmp);
+          return (
+            <g key={v}>
+              <circle cx={C} cy={C} r={toR(v)}
+                fill="none"
+                stroke={v === Math.ceil(maxAmp) ? '#334155' : '#1e293b'}
+                strokeWidth={v === Math.ceil(maxAmp) ? 1 : 0.5}
+                strokeDasharray={v < maxAmp ? '2,3' : undefined} />
+              {/* Label de amplitude em cada anel, à direita */}
+              <text x={C + toR(v) + 2} y={C - 2}
+                fontSize={Math.max(5, S * 0.04)} fill="#334155">{v}mA</text>
+            </g>
+          );
+        })}
 
         {/* A/B/C axes */}
         {Object.entries(DIR_ANGLES).map(([letter, deg]) => {
           const rad = deg * Math.PI / 180;
           const x2 = C + Math.cos(rad) * R;
           const y2 = C - Math.sin(rad) * R;
-          const xl = C + Math.cos(rad) * (R + margin - 5);
-          const yl = C - Math.sin(rad) * (R + margin - 5);
+          const xl = C + Math.cos(rad) * (R + margin * 0.6);
+          const yl = C - Math.sin(rad) * (R + margin * 0.6);
           return (
             <g key={letter}>
               <line x1={C} y1={C} x2={x2} y2={y2} stroke="#1e3a5f" strokeWidth={0.5} />
               <text x={xl} y={yl} textAnchor="middle" dominantBaseline="middle"
-                fontSize={9} fill="#3b82f6" fontWeight="bold">{letter}</text>
+                fontSize={Math.max(7, S * 0.06)} fill="#3b82f6" fontWeight="bold">
+                {letter}
+              </text>
             </g>
           );
         })}
-
+        
         {/* Center */}
-        <circle cx={C} cy={C} r={2} fill="#334155" />
+        <circle cx={C} cy={C} r={Math.max(2, S * 0.013)} fill="#d1fae5" />
 
-        {/* Markers */}
+        {/* Marcadores */}
         {marcadores.map((m, mi) => {
           const contatos = m._contatos || parseConfigToContatos(m.config);
           const { ux, uy } = dirUnitVector2D(contatos);
           const r = toR(m.amp || 0);
           const px = C + ux * r;
-          const py = C - uy * r; // SVG y invertido
+          const py = C - uy * r;
           const isPos = ['tremor', 'rigidez', 'bradicinesia'].includes(m.tipo);
-          const info = MARCADOR_LETRAS[m.tipo] || { letra: '?', cor: '' };
+          const info = MARCADOR_LETRAS[m.tipo] || { letra: '?' };
           const fill = isPos ? '#10b981' : '#f43f5e';
+          const markerR = Math.max(5, S * 0.045);
           const opacity = opacidadeMarcador(
             m.sessionTimestamp || m.timestamp || 0,
             sessaoAtualTimestamp || Date.now()
           );
           return (
-            <g key={mi} opacity={opacity}
-              title={`${m.tipo} | ${m.amp}mA | ${m.freq}Hz | PW:${m.pw}`}>
-              <circle cx={px} cy={py} r={7} fill={fill} fillOpacity={0.2}
+            <g key={mi} opacity={opacity}>
+              <circle cx={px} cy={py} r={markerR} fill={fill} fillOpacity={0.2}
                 stroke={fill} strokeWidth={1} />
               <text x={px} y={py} textAnchor="middle" dominantBaseline="middle"
-                fontSize={8} fill={fill} fontWeight="bold">{info.letra}</text>
+                fontSize={Math.max(6, S * 0.055)} fill={fill} fontWeight="bold">
+                {info.letra}
+              </text>
             </g>
           );
         })}
       </svg>
+
+      {/* Controle de zoom */}
+      <div className="flex items-center gap-1 mt-0.5">
+        <button onClick={() => setZoom(z => Math.max(100, z - 40))}
+          className="w-4 h-4 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] flex items-center justify-center leading-none">
+          −
+        </button>
+        <span className="text-[8px] text-slate-600 w-8 text-center">{zoom}px</span>
+        <button onClick={() => setZoom(z => Math.min(400, z + 40))}
+          className="w-4 h-4 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] flex items-center justify-center leading-none">
+          +
+        </button>
+      </div>
     </div>
   );
 };
 
 const DirectionalHistorico = ({ marcadores, maxAmp, sessaoAtualTimestamp }) => {
-  // Agrupar por PW, injetando _contatos parseados para cada marcador
   const byPW = {};
   marcadores.forEach(m => {
     const pw = m.pw || 60;
@@ -677,40 +702,20 @@ const DirectionalHistorico = ({ marcadores, maxAmp, sessaoAtualTimestamp }) => {
 };
 
 const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp }) => {
-  const S = 120, C = S / 2, margin = 14, R = C - margin;
+  const S = 140, C = S / 2, margin = 16, R = C - margin;
   const toR = (amp) => (Math.min(amp, maxAmp) / Math.max(maxAmp, 0.1)) * R;
 
-  const projections = [
-    { label: 'XY · topo',   axes: ['A','B','C'], getXY: (v) => ({ px: v.ux, py: v.uy }) },
-    { label: 'XZ · frente', axes: ['A','C','Z'], getXY: (v) => ({ px: v.ux, py: v.uz }) },
-    { label: 'YZ · lado',   axes: ['B','Z'],     getXY: (v) => ({ px: v.uy, py: v.uz }) },
-  ];
 
-  const preparedMarkers = marcadores.map(m => ({
-    ...m,
-    _vec: dirVector3D(parseConfigToContatos(m.config), m.amp || 0),
-  }));
 
-  return (
-    <div className="flex flex-col gap-1 p-2 bg-slate-900/80 rounded-lg border border-slate-800 mb-2">
-      <p className="text-[8px] text-slate-500 uppercase tracking-widest text-center">
-        Direcional multi-nível
-      </p>
-      <div className="flex gap-2 justify-center flex-wrap">
-        {projections.map(({ label, getXY }) => (
-          <div key={label} className="flex flex-col items-center gap-0.5">
-            <span className="text-[7px] text-slate-600">{label}</span>
-            <svg width={S} height={S} style={{ background: '#0f172a', borderRadius: 4 }}>
-              {[0.5, 1.0].map((f, i) => (
-                <circle key={i} cx={C} cy={C} r={toR(maxAmp * f)}
-                  fill="none" stroke={i===1?'#334155':'#1e293b'}
-                  strokeWidth={i===1?1:0.5}
-                  strokeDasharray={i===0?'2,3':undefined} />
-              ))}
               <line x1={margin} y1={C} x2={S-margin} y2={C} stroke="#1e293b" strokeWidth={0.5}/>
               <line x1={C} y1={margin} x2={C} y2={S-margin} stroke="#1e293b" strokeWidth={0.5}/>
+
+              {/* Esquema do eletrodo nas vistas Z */}
+              {showSchematic && <ElectrodeSchematic highlightLevels={allLevels} />}
+
               <circle cx={C} cy={C} r={1.5} fill="#334155" />
 
+              {/* Marcadores */}
               {preparedMarkers.map((m, mi) => {
                 const { px: ux, py: uy } = getXY(m._vec);
                 const r = toR(m.amp || 0);
@@ -724,8 +729,7 @@ const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp }) => {
                   sessaoAtualTimestamp || Date.now()
                 );
                 return (
-                  <g key={mi} opacity={opacity}
-                    title={`${m.tipo} | ${m.amp}mA | ${m.freq}Hz`}>
+                  <g key={mi} opacity={opacity}>
                     <circle cx={svgX} cy={svgY} r={5.5} fill={fill} fillOpacity={0.2}
                       stroke={fill} strokeWidth={1}/>
                     <text x={svgX} y={svgY} textAnchor="middle" dominantBaseline="middle"
