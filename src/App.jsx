@@ -705,7 +705,88 @@ const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp }) => {
   const S = 140, C = S / 2, margin = 16, R = C - margin;
   const toR = (amp) => (Math.min(amp, maxAmp) / Math.max(maxAmp, 0.1)) * R;
 
+  const zToSvg = (zVal) => C + (zVal - 1.5) * (R * 0.5) * -1; // invertido: 0=baixo, 3=cima
 
+  const ElectrodeSchematic = ({ highlightLevels }) => {
+    const levels = [3, 2, 1, 0]; // topo para baixo
+    return (
+      <g>
+        {/* Eixo do eletrodo */}
+        <line x1={C} y1={zToSvg(3) - 6} x2={C} y2={zToSvg(0) + 6}
+          stroke="#1e3a5f" strokeWidth={3} />
+        {/* Marcador de cada nível */}
+        {levels.map(lv => {
+          const y = zToSvg(lv);
+          const isDir = lv === 1 || lv === 2;
+          const isHighlighted = highlightLevels?.includes(String(lv));
+          return (
+            <g key={lv}>
+              <rect x={C - 5} y={y - 4} width={10} height={8} rx={2}
+                fill={isHighlighted ? '#2563eb' : (isDir ? '#1e3a5f' : '#0f2744')}
+                stroke={isHighlighted ? '#60a5fa' : '#334155'} strokeWidth={0.5} />
+              <text x={C - 9} y={y + 1} textAnchor="end"
+                fontSize={6} fill={isHighlighted ? '#93c5fd' : '#475569'}>{lv}</text>
+            </g>
+          );
+        })}
+      </g>
+    );
+  };
+
+  const preparedMarkers = marcadores.map(m => ({
+    ...m,
+    _vec: dirVector3D(parseConfigToContatos(m.config), m.amp || 0),
+    _levels: [...new Set(
+      Object.keys(parseConfigToContatos(m.config))
+        .map(k => k[0])
+    )],
+  }));
+
+  // Calcular níveis ativos em todos os marcadores para destacar no esquema
+  const allLevels = [...new Set(preparedMarkers.flatMap(m => m._levels))];
+
+  const projections = [
+    {
+      label: 'XY · topo',
+      showSchematic: false,
+      getXY: (v) => ({ px: v.ux, py: v.uy }),
+    },
+    {
+      label: 'XZ · frente (A)',
+      showSchematic: true,
+      schematicX: margin / 2,
+      getXY: (v) => ({ px: v.ux, py: v.uz }),
+    },
+    {
+      label: 'YZ · lado (B/C)',
+      showSchematic: true,
+      schematicX: margin / 2,
+      getXY: (v) => ({ px: v.uy, py: v.uz }),
+    },
+  ];
+
+  return (
+    <div className="flex flex-col gap-1 p-2 bg-slate-900/80 rounded-lg border border-slate-800 mb-2">
+      <p className="text-[8px] text-slate-500 uppercase tracking-widest text-center">
+        Direcional multi-nível
+      </p>
+      <div className="flex gap-2 justify-center flex-wrap">
+        {projections.map(({ label, showSchematic, getXY }) => (
+          <div key={label} className="flex flex-col items-center gap-0.5">
+            <span className="text-[7px] text-slate-600">{label}</span>
+            <svg width={S} height={S} style={{ background: '#0f172a', borderRadius: 4 }}>
+              {/* Grid */}
+              {[0.5, 1.0].map((f, i) => (
+                <circle key={i} cx={C} cy={C} r={toR(maxAmp * f)}
+                  fill="none" stroke={i===1?'#334155':'#1e293b'}
+                  strokeWidth={i===1?1:0.5}
+                  strokeDasharray={i===0?'2,3':undefined} />
+              ))}
+              <line x1={margin} y1={C} x2={S-margin} y2={C} stroke="#1e293b" strokeWidth={0.5}/>
+              <line x1={C} y1={margin} x2={C} y2={S-margin} stroke="#1e293b" strokeWidth={0.5}/>
+
+              {/* Esquema do eletrodo nas vistas Z */}
+              {showSchematic && <ElectrodeSchematic highlightLevels={allLevels} />}
 
               <line x1={margin} y1={C} x2={S-margin} y2={C} stroke="#1e293b" strokeWidth={0.5}/>
               <line x1={C} y1={margin} x2={C} y2={S-margin} stroke="#1e293b" strokeWidth={0.5}/>
