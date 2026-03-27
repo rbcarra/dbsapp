@@ -642,10 +642,12 @@ const dirVector3D = (contatos, amp) => {
 };
 
 const PolarDisplay2D = ({ marcadores, maxAmp, pw, sessaoAtualTimestamp }) => {
-  const S = 160, C = S / 2, margin = 20, R = C - margin;
+  const [isZoomed, setIsZoomed] = React.useState(false);
+  const S = isZoomed ? 280 : 160;
+  const C = S / 2, margin = S * 0.13, R = C - margin;
   const toR = (amp) => (Math.min(amp, maxAmp) / Math.max(maxAmp, 0.1)) * R;
   const rings = [];
-    for (let v = 1; v <= Math.ceil(maxAmp); v++) rings.push(v);
+  for (let v = 1; v <= Math.ceil(maxAmp); v++) rings.push(v);
 
   return (
   <div 
@@ -827,12 +829,6 @@ const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp }) => {
                   strokeWidth={i===1?1:0.5}
                   strokeDasharray={i===0?'2,3':undefined} />
               ))}
-              <line x1={margin} y1={C} x2={S-margin} y2={C} stroke="#1e293b" strokeWidth={0.5}/>
-              <line x1={C} y1={margin} x2={C} y2={S-margin} stroke="#1e293b" strokeWidth={0.5}/>
-
-              {/* Esquema do eletrodo nas vistas Z */}
-              {showSchematic && <ElectrodeSchematic highlightLevels={allLevels} />}
-
               <line x1={margin} y1={C} x2={S-margin} y2={C} stroke="#1e293b" strokeWidth={0.5}/>
               <line x1={C} y1={margin} x2={C} y2={S-margin} stroke="#1e293b" strokeWidth={0.5}/>
 
