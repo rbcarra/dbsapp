@@ -538,22 +538,52 @@ const classifyStim = (contatos, tipoEletrodo) => {
   return 'multi-dir';
 };
 
-// Vetor 2D unitário a partir dos contatos direcionais
-// catódico = contribuição negativa (conforme spec)
+// Constante matemática para o recuo do centro de massa em contatos de 120 graus
+const R_C_FACTOR = 0.827; 
+
+// Vetor 2D real baseado no Centro de Massa
 const dirUnitVector2D = (contatos) => {
   let vx = 0, vy = 0;
-  for (const [letter, deg] of Object.entries(DIR_ANGLES)) {
-    const key = Object.keys(contatos).find(k => k.endsWith(letter));
-    if (!key || !contatos[key] || contatos[key].state === 'off') continue;
-    const c = contatos[key];
-    const perc = (c.perc ?? 100) / 100; 
-    const rad = deg * Math.PI / 180;
+  let somaCorrentesCatodicas = 0;
+  let somaCorrentesAnodicas = 0;
+
+  // Percorre todos os contatos para somar as componentes X e Y
+  Object.entries(contatos).forEach(([k, c]) => {
+    if (c.state === 'off') return;
+    
+    const perc = (c.perc ?? 100) / 100;
     const sign = c.state === '+' ? 1 : -1;
-    vx += sign * perc * Math.cos(rad);
-    vy += sign * perc * Math.sin(rad);
-  }
-  const mag = Math.sqrt(vx * vx + vy * vy) || 1;
-  return { ux: vx / mag, uy: vy / mag, rawMag: Math.sqrt(vx*vx + vy*vy) };
+    const corrente = sign * perc;
+
+    if (sign < 0) somaCorrentesCatodicas += Math.abs(corrente);
+    else somaCorrentesAnodicas += corrente;
+
+    // Se for contato de anel sólido (0 ou 3), X e Y são 0 (fica no eixo Z)
+    if (!k.match(/[ABC]$/)) return; 
+
+    // Se for direcional, calcula a posição radial usando R_C_FACTOR
+    const letter = k.slice(-1); // Pega 'A', 'B' ou 'C'
+    const deg = DIR_ANGLES[letter];
+    const rad = deg * Math.PI / 180;
+
+    vx += corrente * (R_C_FACTOR * Math.cos(rad));
+    vy += corrente * (R_C_FACTOR * Math.sin(rad));
+  });
+
+  // Evita divisão por zero
+  const divisor = Math.max(somaCorrentesCatodicas, somaCorrentesAnodicas, 1);
+  
+  // O centro de massa final no plano 2D
+  const cx = vx / divisor;
+  const cy = vy / divisor;
+  
+  const rawMag = Math.sqrt(cx*cx + cy*cy);
+  const mag = rawMag || 1; // Previne NaN
+
+  const ux = rawMag === 0 ? 0 : cx / rawMag;
+  const uy = rawMag === 0 ? 0 : cy / rawMag;
+
+  return { ux, uy, rawMag };
 };
 const getContactZ = (key) => {
   const num = parseInt(key[0]);
@@ -562,22 +592,53 @@ const getContactZ = (key) => {
 
 
 const dirVector3D = (contatos, amp) => {
-  const { ux, uy } = dirUnitVector2D(contatos);
+  const { ux, uy, rawMag } = dirUnitVector2D(contatos);
+  
+  let zCatodo = 0, pesoCatodo = 0;
+  let zAnodo = 0, pesoAnodo = 0;
 
-  let zWeighted = 0, totalPerc = 0;
   Object.entries(contatos).forEach(([k, v]) => {
     if (v.state === 'off') return;
     const perc = (v.perc ?? 100) / 100;
-    const z = getContactZ(k);          // posição 0-3
-    const sign = v.state === '+' ? 1 : -1; // FIX 1
-    zWeighted += sign * perc * z;
-    totalPerc += perc;
+    const z = getContactZ(k); // posições: 0, 1, 2, 3
+
+    if (v.state === '-') {
+      zCatodo += z * perc;
+      pesoCatodo += perc;
+    } else if (v.state === '+') {
+      zAnodo += z * perc;
+      pesoAnodo += perc;
+    }
   });
 
-  const uz = totalPerc > 0 ? zWeighted / totalPerc : 0;
+  // Posição média do polo negativo e do polo positivo no eixo longitudinal (z)
+  const zCentroCatodo = pesoCatodo > 0 ? zCatodo / pesoCatodo : null;
+  const zCentroAnodo = pesoAnodo > 0 ? zAnodo / pesoAnodo : null;
+
+  let uz = 0;
+  // Se o usuário usou configuração Bipolar (tem + e -)
+  if (zCentroCatodo !== null && zCentroAnodo !== null) {
+    uz = zCentroCatodo - zCentroAnodo; // Vetor aponta do Anodo para o Cátodo
+  } 
+  // Se for Monopolar (apenas -, com case positivo no gerador)
+  else if (zCentroCatodo !== null) {
+    // Case geralmente fica muito distante (tórax), o vetor tende fortemente 
+    // a não ter um tilt expressivo no Z em relação aos contatos locais.
+    // Preservamos um z simplificado em torno da origem do feixe.
+    uz = 0; 
+  }
+
+  // Normalização vetorial 3D real
   const mag3 = Math.sqrt(ux*ux + uy*uy + uz*uz) || 1;
 
-  return { ux: ux/mag3, uy: uy/mag3, uz: uz/mag3, amp };
+  // A amplitude (amp) escala o tamanho da seta que vai ser renderizada depois no seu SVG
+  return { 
+    ux: ux / mag3, 
+    uy: uy / mag3, 
+    uz: uz / mag3, 
+    amp,
+    rawMag3D: mag3
+  };
 };
 
 const PolarDisplay2D = ({ marcadores, maxAmp, pw, sessaoAtualTimestamp }) => {
@@ -587,89 +648,73 @@ const PolarDisplay2D = ({ marcadores, maxAmp, pw, sessaoAtualTimestamp }) => {
     for (let v = 1; v <= Math.ceil(maxAmp); v++) rings.push(v);
 
   return (
-    <div className="flex flex-col items-center gap-0.5">
-      <span className="text-[8px] text-slate-500 font-mono">PW {pw}µs</span>
-      <svg width={S} height={S} style={{ background: '#0f172a', borderRadius: 6 }}>
-        {/* Grid rings */}
-        {rings.map(v => {
-          const isMain = v === Math.floor(maxAmp);
-          return (
-            <g key={v}>
-              <circle cx={C} cy={C} r={toR(v)}
-                fill="none"
-                stroke={v === Math.ceil(maxAmp) ? '#334155' : '#1e293b'}
-                strokeWidth={v === Math.ceil(maxAmp) ? 1 : 0.5}
-                strokeDasharray={v < maxAmp ? '2,3' : undefined} />
-              {/* Label de amplitude em cada anel, à direita */}
-              <text x={C + toR(v) + 2} y={C - 2}
-                fontSize={Math.max(5, S * 0.04)} fill="#334155">{v}mA</text>
-            </g>
-          );
-        })}
+  <div 
+    className={`relative bg-white border border-slate-300 rounded-lg shadow-sm transition-all duration-300 ease-in-out cursor-pointer ${isZoomed ? 'scale-150 z-50 shadow-xl' : 'hover:scale-105'}`}
+    onClick={() => setIsZoomed(!isZoomed)}
+    title="Clique para ampliar/reduzir"
+  >
+    <svg width={S} height={S} viewBox={`0 0 ${S} ${S}`}>
+      {/* Fundo de alto contraste */}
+      <rect width={S} height={S} fill="#ffffff" rx="8" />
+      
+      {/* Grid Polar - Contraste Melhorado */}
+      {[1, 2, 3, 4, 5, 6].map(v => (
+        <circle key={v} cx={C} cy={C} r={toR(v)} fill="none" stroke="#94a3b8" strokeWidth={0.5} strokeDasharray="2,2" />
+      ))}
+      <circle cx={C} cy={C} r={toR(6)} fill="none" stroke="#475569" strokeWidth={1.5} />
+      
+      {/* Linhas cruzadas */}
+      <line x1={C} y1={C-toR(6)} x2={C} y2={C+toR(6)} stroke="#94a3b8" strokeWidth={0.5} />
+      <line x1={C-toR(6)} y1={C} x2={C+toR(6)} y2={C} stroke="#94a3b8" strokeWidth={0.5} />
 
-        {/* A/B/C axes */}
-        {Object.entries(DIR_ANGLES).map(([letter, deg]) => {
-          const rad = deg * Math.PI / 180;
-          const x2 = C + Math.cos(rad) * R;
-          const y2 = C - Math.sin(rad) * R;
-          const xl = C + Math.cos(rad) * (R + margin * 0.6);
-          const yl = C - Math.sin(rad) * (R + margin * 0.6);
-          return (
-            <g key={letter}>
-              <line x1={C} y1={C} x2={x2} y2={y2} stroke="#1e3a5f" strokeWidth={0.5} />
-              <text x={xl} y={yl} textAnchor="middle" dominantBaseline="middle"
-                fontSize={Math.max(7, S * 0.06)} fill="#3b82f6" fontWeight="bold">
-                {letter}
-              </text>
-            </g>
-          );
-        })}
+      {/* CORREÇÃO BUG 2: Rótulos A, B, C de Direção */}
+      {Object.entries(DIR_ANGLES).map(([letter, deg]) => {
+        const rad = deg * Math.PI / 180;
+        // Posiciona a letra ligeiramente fora do raio máximo (R+12)
+        const labelR = toR(6) + 12; 
+        const px = C + labelR * Math.cos(rad);
+        const py = C - labelR * Math.sin(rad); // SVG Y é invertido
+        return (
+          <text key={letter} x={px} y={py} textAnchor="middle" dominantBaseline="middle" fontSize="12" fontWeight="bold" fill="#1e293b">
+            {letter}
+          </text>
+        );
+      })}
+
+      {/* Marcadores (utilizando a correção da mensagem anterior) */}
+      {marcadores.map((m, mi) => {
+        const contatos = m._contatos || parseConfigToContatos(m.config);
+        const { ux, uy, rawMag = 1 } = dirUnitVector2D(contatos); 
         
-        {/* Center */}
-        <circle cx={C} cy={C} r={Math.max(2, S * 0.013)} fill="#d1fae5" />
+        const r = toR(m.amp || 0) * rawMag; 
+        const px = C + ux * r;
+        const py = C - uy * r;
 
-        {/* Marcadores */}
-        {marcadores.map((m, mi) => {
-          const contatos = m._contatos || parseConfigToContatos(m.config);
-          const { ux, uy } = dirUnitVector2D(contatos);
-          const r = toR(m.amp || 0);
-          const px = C + ux * r;
-          const py = C - uy * r;
-          const isPos = ['tremor', 'rigidez', 'bradicinesia'].includes(m.tipo);
-          const info = MARCADOR_LETRAS[m.tipo] || { letra: '?' };
-          const fill = isPos ? '#10b981' : '#f43f5e';
-          const markerR = Math.max(5, S * 0.045);
-          const opacity = opacidadeMarcador(
-            m.sessionTimestamp || m.timestamp || 0,
-            sessaoAtualTimestamp || Date.now()
-          );
-          return (
-            <g key={mi} opacity={opacity}>
-              <circle cx={px} cy={py} r={markerR} fill={fill} fillOpacity={0.2}
-                stroke={fill} strokeWidth={1} />
-              <text x={px} y={py} textAnchor="middle" dominantBaseline="middle"
-                fontSize={Math.max(6, S * 0.055)} fill={fill} fontWeight="bold">
-                {info.letra}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
+        const isPos = ['tremor', 'rigidez', 'bradicinesia'].includes(m.tipo);
+        const info = MARCADOR_LETRAS[m.tipo] || { letra: '?' };
+        const fill = isPos ? '#059669' : '#e11d48'; // Cores mais fortes (Emerald-600 e Rose-600)
+        const markerR = Math.max(5, S * 0.045);
+        
+        // Opacidade mínima aumentada para garantir contraste
+        const opacity = Math.max(0.4, opacidadeMarcador(
+          m.sessionTimestamp || m.timestamp || 0, 
+          sessaoAtualTimestamp || Date.now()
+        ));
 
-      {/* Controle de zoom */}
-      <div className="flex items-center gap-1 mt-0.5">
-        <button onClick={() => setZoom(z => Math.max(100, z - 40))}
-          className="w-4 h-4 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] flex items-center justify-center leading-none">
-          −
-        </button>
-        <span className="text-[8px] text-slate-600 w-8 text-center">{zoom}px</span>
-        <button onClick={() => setZoom(z => Math.min(400, z + 40))}
-          className="w-4 h-4 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] flex items-center justify-center leading-none">
-          +
-        </button>
-      </div>
-    </div>
-  );
+        return (
+          <g key={mi} opacity={opacity}>
+            <line x1={C} y1={C} x2={px} y2={py} stroke={fill} strokeWidth={1} strokeDasharray="2,2" opacity={0.6} />
+            <circle cx={px} cy={py} r={markerR} fill={fill} fillOpacity={0.3} stroke={fill} strokeWidth={2} />
+            <text x={px} y={py} textAnchor="middle" dominantBaseline="middle" fontSize={Math.max(8, S * 0.06)} fill="#ffffff" fontWeight="bold" stroke={fill} strokeWidth={0.5}>
+              {info.letra}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+    {isZoomed && <div className="absolute top-1 right-2 text-[10px] text-slate-500 font-bold bg-white/80 px-1 rounded">ZOOM ATIVO</div>}
+  </div>
+);
 };
 
 const DirectionalHistorico = ({ marcadores, maxAmp, sessaoAtualTimestamp }) => {
