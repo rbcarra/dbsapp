@@ -48,15 +48,26 @@ const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp, grupoKey, sessaoAtua
           {/* Indicadores de programação prévia — bolinhas coloridas por efeito */}
           {mostrarPrevios && (historicoRef || []).map((h, hi) => {
             const hContatos = parseConfigToContatos(h.config);
-            const { ux, uy } = dirUnitVector2D(hContatos);
+            const hType = classifyStim(hContatos, 'directional');
+            const isRing = hType === 'ring' || !getDirLevel(h.config);
             const ampEf = calcAmpEfetiva(hContatos, h.amp || 0);
-            const r = toR(ampEf);
-            const px = C + ux * r, py = C - uy * r;
             const cor = h.efeito === 'bom' ? '#10b981' : h.efeito === 'ruim' ? '#f43f5e' : h.efeito === 'pouco' ? '#94a3b8' : '#67e8f9';
             const opacity = Math.max(0.4, opacidadeMarcador(h.date || 0, sessaoAtualTimestamp || Date.now()));
+            const rr = toR(ampEf);
+            if (isRing) {
+              // Draw as concentric ring
+              return (
+                <g key={`hist-${hi}`} opacity={opacity}>
+                  <title>{`[prev-ring] ${h.config} | ${h.amp}mA | ${h.efeito}`}</title>
+                  <circle cx={C} cy={C} r={rr} fill="none" stroke={cor} strokeWidth={1.5} strokeDasharray="3,2" opacity={0.6}/>
+                </g>
+              );
+            }
+            const { ux, uy } = dirUnitVector2D(hContatos);
+            const px = C + ux * rr, py = C - uy * rr;
             return (
               <g key={`hist-${hi}`} opacity={opacity}>
-                <title>{`${h.config} | ${h.amp}mA | ${h.freq}Hz | ${h.efeito}`}</title>
+                <title>{`[prev-dir] ${h.config} | ${h.amp}mA | ${h.efeito}`}</title>
                 <circle cx={px} cy={py} r={Math.max(4, S * 0.033)}
                   fill={cor} fillOpacity={0.25} stroke={cor} strokeWidth={1.5}/>
               </g>
@@ -258,7 +269,7 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp, sessaoAtualTimestamp, 
 
   const projections = [
     { label: 'XY · topo', showSchematic: false, getXY: v => ({ px: v.ux, py: v.uy }),
-      dirLabels: Object.entries(DIR_ANGLES).map(([lt, deg]) => ({ letter: lt, lx: Math.cos(deg * Math.PI / 180), ly: -Math.sin(deg * Math.PI / 180) })) },
+      dirLabels: Object.entries(DIR_ANGLES).map(([lt, deg]) => ({ letter: lt, lx: Math.cos(deg * Math.PI / 180), ly: Math.sin(deg * Math.PI / 180) })) },
     { label: 'XZ · frente', showSchematic: true, getXY: v => ({ px: v.ux, py: v.uz }),
       dirLabels: [{ letter: 'A', lx: 1, ly: 0 }, { letter: 'B/C', lx: -0.5, ly: 0 }] },
     { label: 'YZ · lado', showSchematic: true, getXY: v => ({ px: v.uy, py: v.uz }),
@@ -371,21 +382,33 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp, sessaoAtualTimestamp, 
             </g>
           );
         })}
-        {/* Indicadores de programação prévia — each from its own Z-origin */}
+        {/* Indicadores de programação prévia — ring shown as rings, dir as dots */}
         {mostrarPrevios && histItems.map((h, hi) => {
           const hContatos = parseConfigToContatos(h.config);
+          const hType = classifyStim(hContatos, 'directional');
+          const isRing = hType === 'ring' || !getDirLevel(h.config);
+          if (isRing && !mostrarRing) return null;
+          if (!isRing && !mostrarSingleDir) return null;
           const hVec = dirVector3D(hContatos, h.amp || 0);
-          const { px: hux, py: huy } = getXY(hVec);
-          const hr = toR(hVec.amp || 0);
-          const hOY = itemOriginY(h.config, showSchematic);
-          const hx = originX + hux * hr, hy = hOY - huy * hr;
           const cor = h.efeito === 'bom' ? '#10b981'
             : h.efeito === 'ruim' ? '#f43f5e'
             : h.efeito === 'pouco' ? '#94a3b8' : '#67e8f9';
           const opacity = Math.max(0.35, opacidadeMarcador(h.date || 0, sessaoAtualTimestamp || Date.now()));
+          const hr = toR(hVec.amp || 0);
+          const hOY = itemOriginY(h.config, showSchematic);
+          if (isRing) {
+            return (
+              <g key={`previo-${hi}`} opacity={opacity}>
+                <title>{`[prev-ring] ${h.config} | ${h.amp}mA | ${h.efeito}`}</title>
+                <circle cx={originX} cy={hOY} r={hr} fill="none" stroke={cor} strokeWidth={1.5} strokeDasharray="3,2" opacity={0.6}/>
+              </g>
+            );
+          }
+          const { px: hux, py: huy } = getXY(hVec);
+          const hx = originX + hux * hr, hy = hOY - huy * hr;
           return (
             <g key={`previo-${hi}`} opacity={opacity}>
-              <title>{`Prev: ${h.config} | ${h.amp}mA | ${h.efeito}`}</title>
+              <title>{`[prev-dir] ${h.config} | ${h.amp}mA | ${h.efeito}`}</title>
               <circle cx={hx} cy={hy} r={Math.max(3.5, S * 0.028)}
                 fill={cor} fillOpacity={0.3} stroke={cor} strokeWidth={1.5}/>
             </g>

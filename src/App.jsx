@@ -9,6 +9,7 @@ import { DIR_ANGLES, getDirLevel, parseConfigToContatos, classifyStim,
 import { BlocoColapsavel, LoginModal, PatientSelector, ConfirmDialog } from './PatientComponents';
 import { VisualizadorEletrodo, RenderPrograma } from './ProgramComponents';
 import { TimelineHistorico } from './DisplayComponents';
+import { ExtractorModal } from './ExtractorComponents';
 
 import { auth, db, appId } from './firebase';
 
@@ -62,6 +63,7 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState("");
   const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, sessionId: null, mode: 'soft' });
   const [showMonopolar, setShowMonopolar] = useState(false);
+  const [showExtrator, setShowExtrator] = useState(false);
   const [considerarAmplitude, setConsiderarAmplitude] = useState(false);
   const [blocosAbertos, setBlocosAbertos] = useState({
     progAnterior: true,
@@ -1234,6 +1236,9 @@ ${progTexto}Avaliação: ${textoEfeito}
           <button onClick={() => setShowMonopolar(true)} className="px-3 py-1.5 rounded font-bold text-sm transition-colors shadow-sm whitespace-nowrap bg-violet-600 hover:bg-violet-700 text-white">
             🔬 Monopolar
           </button>
+          <button onClick={() => setShowExtrator(true)} className="px-3 py-1.5 rounded font-bold text-sm transition-colors shadow-sm whitespace-nowrap bg-amber-500 hover:bg-amber-600 text-white">
+            📄 Extrator
+          </button>
         </div>
       </header>
 
@@ -1702,6 +1707,60 @@ ${progTexto}Avaliação: ${textoEfeito}
           </div>
         );
       })()}
+
+      {/* EXTRATOR DE PRONTUÁRIOS */}
+      {showExtrator && (
+        <ExtractorModal
+          onClose={() => setShowExtrator(false)}
+          pacienteInicial={activePatient}
+          onImportarPaciente={async (nome, hc, reviewed) => {
+            // Encontrar ou criar paciente
+            let paciente = patients.find(p => (p.hc || '').trim() === (hc || '').trim());
+            if (!paciente) {
+              const ref = await addDoc(
+                collection(db, `artifacts/${appId}/users/${user.uid}/patients`),
+                { nome, hc, criadoEm: Date.now() }
+              );
+              paciente = { id: ref.id, nome, hc };
+            }
+            // Importar cada sessão revisada
+            let importadas = 0;
+            for (const row of reviewed) {
+              if (!row.parsed || Object.keys(row.parsed).length === 0) continue;
+              // Converter data dd/mm/yyyy para timestamp
+              let ts = Date.now();
+              if (row.date) {
+                const parts = row.date.split('/');
+                if (parts.length === 3) {
+                  const d = parseInt(parts[0]), mo = parseInt(parts[1]), y = parseInt(parts[2]);
+                  const parsed = new Date(y, mo - 1, d);
+                  if (!isNaN(parsed.getTime())) ts = parsed.getTime();
+                }
+              }
+              await addDoc(
+                collection(db, `artifacts/${appId}/users/${user.uid}/sessions`),
+                {
+                  patientId: paciente.id,
+                  timestamp: ts,
+                  dadosGrupos: row.parsed,
+                  tipoEletrodo: row.tipoEletrodo || '4-ring',
+                  resumoSessao: row.evolution || '',
+                  notasLivres: '',
+                  clinica: '',
+                  type: 'active',
+                  importadoViaExtrator: true,
+                  marcadoresClinicosL: row.marcadoresClinicosL || [],
+                  marcadoresClinicosR: row.marcadoresClinicosR || [],
+                  efeitosColaterais: { L: [], R: [] },
+                }
+              );
+              importadas++;
+            }
+            setShowExtrator(false);
+            alert(`✓ ${importadas} sessão(ões) importadas para ${nome} (HC ${hc})`);
+          }}
+        />
+      )}
 
       {/* PAINEL LATERAL DE SESSÕES */}
       {isPanelOpen && (
