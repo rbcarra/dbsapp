@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { MARCADOR_LETRAS, opacidadeMarcador, formatarData } from './constants';
 import { DIR_ANGLES, parseConfigToContatos, classifyStim, getDirLevel,
   dirUnitVector2D, calcAmpEfetiva, dirVector3D } from './vectorHelpers';
