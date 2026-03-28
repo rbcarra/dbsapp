@@ -728,6 +728,7 @@ const PolarDisplay2D = ({ marcadores, maxAmp, pw, sessaoAtualTimestamp, programa
       </div>
     </div>
   );
+};
 
 const DirectionalHistorico = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContatos, ampAtual }) => {
   const byPW = {};
@@ -755,7 +756,6 @@ const DirectionalHistorico = ({ marcadores, maxAmp, sessaoAtualTimestamp, progra
           programaContatos={programaContatos}
           ampAtual={ampAtual}
         />
-      ))}
       ))}
     </div>
   );
