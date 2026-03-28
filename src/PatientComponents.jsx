@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { auth } from './firebase';
 
 const BlocoColapsavel = ({ titulo, aberto, onToggle, children, corHeader = 'bg-slate-50' }) => (
   <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">

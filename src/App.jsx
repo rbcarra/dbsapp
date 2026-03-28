@@ -1,7 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInWithCustomToken, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, addDoc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { signInWithCustomToken, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { collection, doc, setDoc, getDoc, onSnapshot, addDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 
 import { TIPOS_ELETRODO, ORDEM_TEXTO_BAIXO_CIMA, MARCADOR_LETRAS,
   opacidadeMarcador, getContatosIniciais, getStringConfig, formatarData } from './constants';
@@ -11,31 +10,7 @@ import { BlocoColapsavel, LoginModal, PatientSelector, ConfirmDialog } from './P
 import { VisualizadorEletrodo, RenderPrograma } from './ProgramComponents';
 import { TimelineHistorico } from './DisplayComponents';
 
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'dbs-logger-hcfmusp';
-
-const firebaseConfig = {
-
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-
-};
-
-
-
-const app = initializeApp(firebaseConfig);
-
-const auth = getAuth(app);
-
-const db = getFirestore(app);
+import { auth, db, appId } from './firebase';
 
 
 
