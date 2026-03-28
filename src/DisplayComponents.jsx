@@ -3,11 +3,18 @@ import { MARCADOR_LETRAS, opacidadeMarcador, formatarData } from './constants';
 import { DIR_ANGLES, parseConfigToContatos, classifyStim, getDirLevel,
   dirUnitVector2D, calcAmpEfetiva, dirVector3D } from './vectorHelpers';
 
-const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp, grupoKey, sessaoAtualTimestamp, programaContatos, ampAtual, labelGrupo, mostrarPositivos = true, mostrarNegativos = true, mostrarPrevios = true }) => {
+const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey, sessaoAtualTimestamp, programaContatos, ampAtual, labelGrupo, mostrarPositivos = true, mostrarNegativos = true, mostrarPrevios = true }) => {
   const [isZoomed, setIsZoomed] = React.useState(false);
   const S = isZoomed ? 300 : 160;
   const C = S / 2, margin = S * 0.14, R = C - margin;
-  const toR = (amp) => (Math.min(Math.max(amp,0), maxAmp) / Math.max(maxAmp, 0.1)) * R;
+  // Fix 2: maxAmp from actual displayed data
+  const allAmps = [
+    ampAtual || 0,
+    ...marcadores.map(m => m.amp || 0),
+    ...(historicoRef || []).map(h => h.amp || 0),
+  ];
+  const maxAmp = Math.max(maxAmpProp || 0, ...allAmps, 1);
+  const toR = (amp) => (Math.min(Math.max(amp,0), maxAmp) / maxAmp) * R;
   const rings = [];
   for (let v = 1; v <= Math.ceil(maxAmp); v++) rings.push(v);
 
@@ -164,22 +171,21 @@ const DirectionalHistorico = ({ marcadores, historicoRef, maxAmp, sessaoAtualTim
   );
 };
 
-const TripleView3D = ({ marcadores, historicoRef, maxAmp, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq, marcadoresRing }) => {
+const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq, marcadoresRing }) => {
   const [isZoomed, setIsZoomed] = React.useState(false);
   const [mostrarRing, setMostrarRing] = React.useState(true);
   const [mostrarSingleDir, setMostrarSingleDir] = React.useState(true);
   const [mostrarPositivos, setMostrarPositivos] = React.useState(true);
   const [mostrarNegativos, setMostrarNegativos] = React.useState(true);
   const [mostrarPrevios, setMostrarPrevios] = React.useState(true);
+  const [apenasSimilar, setApenasSimilar] = React.useState(false);
   const S = isZoomed ? 240 : 140;
   const C = S / 2, margin = S * 0.12, R = C - margin;
-  const toR = (amp) => (Math.min(Math.max(amp, 0), maxAmp) / Math.max(maxAmp, 0.1)) * R;
-  const rings = [];
-  for (let v = 1; v <= Math.ceil(maxAmp); v++) rings.push(v);
 
-  // Bug 2: calculate charge center (z origin) from programaContatos
+  // Fix 2: maxAmp from actual data, not slider max
+  const allRing = marcadoresRing || [];
   const calcZCenter = (contatos) => {
-    if (!contatos) return 1.5; // default: middle of 0-3 range
+    if (!contatos) return 1.5;
     let zSum = 0, wSum = 0;
     Object.entries(contatos).forEach(([k, v]) => {
       if (v.state === 'off') return;
@@ -189,14 +195,17 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp, sessaoAtualTimestamp, 
     });
     return wSum > 0 ? zSum / wSum : 1.5;
   };
-  const zOriginVal = programaContatos ? calcZCenter(programaContatos) : 1.5;
-  // Convert z value (0-3) to SVG y coordinate — origin is at zOriginVal
-  const zToSvg = (zVal) => C - (zVal - zOriginVal) * (R * 0.45);
-  // Origin in SVG space
-  const zOriginSvg = zToSvg(zOriginVal); // = C always, by definition
 
-  // Bug 3: separate ring markers properly
-  const allRing = marcadoresRing || [];
+  // Fix 1: similar filter based on programaContatos level
+  const currentLevel = programaContatos
+    ? [...new Set(Object.keys(programaContatos).filter(k => programaContatos[k].state !== 'off' && /[ABC]$/.test(k)).map(k => k[0]))]
+    : [];
+  const isSimilar = (config) => {
+    if (!apenasSimilar || currentLevel.length === 0) return true;
+    const levels = [...new Set(Object.keys(parseConfigToContatos(config)).filter(k => /[ABC]$/.test(k)).map(k => k[0]))];
+    return levels.some(l => currentLevel.includes(l));
+  };
+
   const marcadoresSingleDirExtras = mostrarSingleDir ? allRing.filter(m => {
     const c = parseConfigToContatos(m.config);
     return classifyStim(c, 'directional') === 'single-dir';
@@ -207,12 +216,12 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp, sessaoAtualTimestamp, 
     return st === 'ring' || (!getDirLevel(m.config) && st !== 'single-dir');
   }) : [];
 
-  // Filter by positivos/negativos/previos
   const filterMarcador = (m, isCurrent) => {
     const isPos = ['tremor', 'rigidez', 'bradicinesia'].includes(m.tipo);
     if (isPos && !mostrarPositivos) return false;
     if (!isPos && !mostrarNegativos) return false;
     if (!isCurrent && !mostrarPrevios) return false;
+    if (!isCurrent && !isSimilar(m.config)) return false;
     return true;
   };
 
@@ -225,13 +234,33 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp, sessaoAtualTimestamp, 
     if (marcadores.includes(m)) byGroup[key].multiDir.push(m);
     else byGroup[key].singleDir.push(m);
   });
-  // Group historicoRef by PW/Freq
   const histByGroup3D = {};
   (historicoRef || []).forEach(h => {
-    const key = String(agruparPorFreq ? (h.freq || 130) : (h.pw || 60));
-    if (!histByGroup3D[key]) histByGroup3D[key] = [];
-    histByGroup3D[key].push(h);
+    if (mostrarPrevios && isSimilar(h.config)) {
+      const key = String(agruparPorFreq ? (h.freq || 130) : (h.pw || 60));
+      if (!histByGroup3D[key]) histByGroup3D[key] = [];
+      histByGroup3D[key].push(h);
+    }
   });
+
+  // Fix 2: compute effective maxAmp from all visible data
+  const allAmps = [
+    ampAtual || 0,
+    ...marcadores.map(m => m.amp || 0),
+    ...allRing.map(m => m.amp || 0),
+    ...(historicoRef || []).map(h => h.amp || 0),
+  ];
+  const maxAmp = Math.max(maxAmpProp || 0, ...allAmps, 1);
+
+  const toR = (amp) => (Math.min(Math.max(amp, 0), maxAmp) / maxAmp) * R;
+  const rings = [];
+  for (let v = 1; v <= Math.ceil(maxAmp); v++) rings.push(v);
+
+  const zOriginVal = programaContatos ? calcZCenter(programaContatos) : 1.5;
+  // Fix 2: zToSvg uses R which is now scaled to actual maxAmp — electrode stays proportional
+  const zScale = R * 0.45; // each z-unit = 45% of R
+  const zToSvg = (zVal) => C - (zVal - zOriginVal) * zScale;
+  const zOriginSvg = zToSvg(zOriginVal);
 
   const allKeys = [...new Set([
     ...Object.keys(byGroup),
@@ -442,6 +471,10 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp, sessaoAtualTimestamp, 
           <label className="flex items-center gap-0.5 cursor-pointer">
             <input type="checkbox" checked={mostrarPrevios} onChange={e => setMostrarPrevios(e.target.checked)} className="accent-slate-500 w-3 h-3"/>
             <span className="text-[8px] text-slate-500">Prev</span>
+          </label>
+          <label className="flex items-center gap-0.5 cursor-pointer">
+            <input type="checkbox" checked={apenasSimilar} onChange={e => setApenasSimilar(e.target.checked)} className="accent-amber-500 w-3 h-3"/>
+            <span className="text-[8px] text-amber-600">Sim.</span>
           </label>
           <button onClick={() => setIsZoomed(!isZoomed)} className="text-[8px] text-slate-500 hover:text-slate-700 font-bold px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200">
             {isZoomed ? '−' : '+'}

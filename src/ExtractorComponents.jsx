@@ -96,8 +96,8 @@ const parseProgramming = (rawText) => {
     const line = rawLine.trim();
     if (!line) continue;
 
-    // Group header: "Grupo A", "Grupo 1" etc.
-    const gm = line.match(/^grupo\s+([a-dA-D1-4])/i);
+    // Group header: "Grupo A", "Grupo 1", "GRUPO B (EM USO...)", "GRUPO C:"
+    const gm = line.match(/^grupo\s+([a-dA-D1-4])\b/i);
     if (gm) {
       const g = gm[1].toUpperCase();
       currentGroup = {'1':'A','2':'B','3':'C','4':'D'}[g] || g;
@@ -116,9 +116,16 @@ const parseProgramming = (rawText) => {
     const m3 = line.match(/^\(([EDLRedlr]\d*)\)\s*[:](.*)/i);
     if (m3) { push(currentGroup, parseSide(m3[1]), parseParams(m3[2]||line)); continue; }
 
-    // Correção 1: "E 0-00 2,8mA..." ou "D: 0-00 ..." sem palavra "Lead"
+    // FIX 2: "ESQ ...", "DIR ..." (common abbreviations for left/right)
+    const mEsqDir = line.match(/^(ESQ|DIR|ESQUERDO|DIREITO)\s+(.+)/i);
+    if (mEsqDir) {
+      const side = /^(ESQ|ESQUERDO)/i.test(mEsqDir[1]) ? 'L' : 'R';
+      push(currentGroup, side, parseParams(mEsqDir[2])); continue;
+    }
+
+    // "E 0-00 2,8mA..." ou "D: 0-00 ..." sem palavra "Lead"
     const m4 = line.match(/^([EDed])\s*[:.\s]\s*(.*)/);
-    if (m4 && !/^(eletrodo|desc)/i.test(line)) {
+    if (m4 && !/^(eletrodo|desc|esq|dir)/i.test(line)) {
       push(currentGroup, parseSide(m4[1]), parseParams(m4[2]||line)); continue;
     }
   }
@@ -127,74 +134,133 @@ const parseProgramming = (rawText) => {
 
 // ─── CSV EXPORT ─────────────────────────────────────────────────
 // ─── THRESHOLD TEST PARSER ───────────────────────────────────────────────────
-// Parses text describing contact threshold tests:
-// "Nível 1 / contato 1A — positivo: tremor 2.0mA, rigidez 1.5mA | negativo: parestesia 3.0mA"
 
 const POSITIVE_EFFECTS = ['bradicinesia','rigidez','tremor'];
-const NEGATIVE_EFFECTS = ['disartria','cápsula','capsula','parestesia','contração','contracao','contracoes','contrações'];
 
-const parseThresholdText = (text, lado, pw = 60, freq = 130) => {
+// Effect keyword → DBS Log tipo mapping
+// Key = regex pattern (case insensitive), value = tipo
+const EFFECT_PATTERNS = [
+  [/c[aá]psula|cap|capsula/i,          'Cápsula'],
+  [/parestesia|paresthesia/i,             'Parestesia'],
+  [/disartria|dysarthria/i,               'Disartria'],
+  [/bradicinesia|bradykinesia/i,          'bradicinesia'],
+  [/rigidez|rigidity/i,                   'rigidez'],
+  [/tremor/i,                             'tremor'],
+  // Everything else → Outros
+  [/mal.?estar|inespec[íi]fico|tontura|n[áa]usea|enjoo|cefaleia|visual|turvação|turva[çc]/i, 'Outros'],
+  [/flex[ãa]o|extens[ãa]o|contra[çc][ãa]o|espasmo|contrac/i,                               'Outros'],
+  [/calor|frio|formigamento|sensação|sens[ao]/i,                                             'Outros'],
+];
+
+// Map high contact numbers (8-15) to electrode contacts (0-7 → subtract 8 for right)
+// Assumes: left uses 0-7, right uses 8-15 (or 0-3 and 8-11 for 4-contact)
+const mapContactNum = (numStr) => {
+  const n = parseInt(numStr);
+  if (isNaN(n)) return null;
+  // High numbers: map to local electrode contact
+  if (n >= 8) return { local: String(n - 8), inferredSide: 'R' };
+  return { local: String(n), inferredSide: 'L' };
+};
+
+const parseThresholdText = (text, ladoDefault, pw = 60, freq = 130) => {
   if (!text || !text.trim()) return [];
   const markers = [];
-  const lines = text.split('\n').filter(l => l.trim());
-  
-  // Regex for contact identifier: "1A", "2B", "0", "1", "nível 1A", "contato 2"
-  const contactRe = /(?:n[íi]vel|contato|contact|lead)?\s*([0-3][ABC]?)/gi;
-  
-  for (const line of lines) {
-    // Find contact in this line
-    contactRe.lastIndex = 0;
-    const contactMatch = contactRe.exec(line);
-    if (!contactMatch) continue;
-    const contact = contactMatch[1].toUpperCase();
+
+  // Split on "//" or newline, then process section by section for left/right
+  // First detect if text has "Esquerdo:" / "Direito:" section markers
+  const normalized = text.replace(/\/\//g, '\n');
+  const allLines = normalized.split(/\n/).map(l => l.trim()).filter(Boolean);
+
+  let currentSide = ladoDefault || 'L'; // track which side we're parsing
+
+  for (const line of allLines) {
+    // Side section headers: "Esquerdo:", "Direito:", "Hemisfério E:", etc.
+    // After detecting side, continue processing the REMAINDER of the same line
+    let lineToProcess = line;
+    if (/^(esquerdo|hemisf[eé]rio\s*e|hsq?e?\b|lado\s*e)/i.test(line)) {
+      currentSide = 'L';
+      lineToProcess = line.replace(/^(esquerdo|hemisf[eé]rio\s*e|lado\s*e)[\s:]+/i, '').trim();
+      if (!lineToProcess) continue;
+    } else if (/^(direito|hemisf[eé]rio\s*d|hsd?\b|lado\s*d)/i.test(line)) {
+      currentSide = 'R';
+      lineToProcess = line.replace(/^(direito|hemisf[eé]rio\s*d|lado\s*d)[\s:]+/i, '').trim();
+      if (!lineToProcess) continue;
+    }
+
+    // Skip lines that say "sem efeitos" clearly
+    if (/sem\s+efeitos?\s+colaterais?/i.test(lineToProcess)) continue;
+
+    // ── Find contact identifier ──
+    const ctMatch =
+      lineToProcess.match(/(?:contato|n[íi]vel|n[íi]vel\s+direcional|contact)[\s.:-]*([0-9]+[ABC]?)/i) ||
+      lineToProcess.match(/^\s*([0-9]+[ABC]?)[\s.:-]/);
+
+    if (!ctMatch) continue;
+    const rawContact = ctMatch[1];
+
+    // Determine contact string and infer side from high numbers
+    let contactStr, side = currentSide;
+    if (/[ABC]$/.test(rawContact)) {
+      // Directional contact like "1A"
+      contactStr = rawContact.toUpperCase();
+    } else {
+      const mapped = mapContactNum(rawContact);
+      if (!mapped) continue;
+      contactStr = mapped.local;
+      // If high number detected, override current side
+      if (parseInt(rawContact) >= 8) side = mapped.inferredSide;
+    }
+
+    // ── Find amplitude in this line (V or mA, comma or dot) ──
+    // Look for patterns like "4,6V", "5.3 mA", "2,4V>"
+    const ampMatch = lineToProcess.match(/([0-9]+[.,][0-9]+|[0-9]+)\s*[Vv](?![a-zA-Z])/i) ||
+                     lineToProcess.match(/([0-9]+[.,][0-9]+|[0-9]+)\s*m[Aa]/i);
+    if (!ampMatch) continue;
+    const amp = parseFloat(ampMatch[1].replace(',', '.'));
+    if (isNaN(amp) || amp <= 0 || amp > 20) continue; // sanity check
+
+    // ── Classify effect from rest of line ──
+    // Skip the contact+amplitude part, look at the remainder
+    const remainder = lineToProcess.slice(ctMatch.index + ctMatch[0].length);
     
-    // Build config string for this contact (single cathode)
-    // e.g. "1A" → "1A-100", "0" → "0-100"
-    const buildConfig = (c) => `${c}-100`;
-    
-    // Find all amplitude+effect pairs in this line
-    // Pattern: effect_word near a number (mA value)
-    const ampRe = /([\d][\d.,]*)\s*m[Aa]/g;
-    
-    for (const effWord of [...POSITIVE_EFFECTS, ...NEGATIVE_EFFECTS]) {
-      const effRe = new RegExp(effWord, 'gi');
-      let effMatch;
-      while ((effMatch = effRe.exec(line)) !== null) {
-        // Find nearest mA value within 30 chars of the effect word
-        const context = line.slice(Math.max(0, effMatch.index - 20), effMatch.index + 40);
-        const ampM = context.match(/([\d][\d.,]*)\s*m[Aa]/i);
-        if (!ampM) continue;
-        const amp = parseFloat(ampM[1].replace(',','.'));
-        if (isNaN(amp) || amp <= 0) continue;
-        
-        const tipo = POSITIVE_EFFECTS.includes(effWord.toLowerCase())
-          ? effWord.toLowerCase().replace('ã','a').replace('õ','o')
-          : effWord.toLowerCase().replace('ã','a').replace('õ','o').replace('ç','c');
-        
-        // Normalise tipo to DBS Log keys
-        const tipoMap = {
-          bradicinesia: 'bradicinesia', rigidez: 'rigidez', tremor: 'tremor',
-          disartria: 'Disartria', capsula: 'Cápsula', cápsula: 'Cápsula',
-          parestesia: 'Parestesia',
-          contracao: 'Outros', contracoes: 'Outros',
-          contração: 'Outros', contrações: 'Outros',
-        };
-        const tipoFinal = tipoMap[effWord.toLowerCase()] || 'Outros';
-        
-        markers.push({
-          id: Date.now() + Math.random(),
-          tipo: tipoFinal,
-          config: buildConfig(contact),
-          amp,
-          pw,
-          freq,
-          grupo: 'A',
-          timestamp: Date.now(),
-        });
+    if (/sem\s+efeitos?/i.test(remainder)) continue;
+
+    let tipo = null;
+    for (const [pattern, tipoName] of EFFECT_PATTERNS) {
+      if (pattern.test(remainder) || pattern.test(lineToProcess)) {
+        tipo = tipoName;
+        break;
       }
     }
+
+    // If no known effect found but line has content beyond amp → Outros
+    const afterAmp = (remainder + ' ' + lineToProcess).replace(/[0-9]+[.,]?[0-9]*\s*[VvmMaA]+[><]?\s*/g,'').trim();
+    if (!tipo && afterAmp.length > 3 && !/sem\s+efeito/i.test(afterAmp)) {
+      tipo = 'Outros';
+    }
+    if (!tipo) continue;
+
+    markers.push({
+      id: Date.now() + Math.random(),
+      tipo,
+      config: `${contactStr}-100`,
+      amp,
+      pw,
+      freq,
+      grupo: 'A',
+      lado: side,
+      timestamp: Date.now(),
+    });
   }
   return markers;
+};
+
+// Split combined threshold text into L and R markers
+const parseThresholdBothSides = (text, pw = 60, freq = 130) => {
+  const all = parseThresholdText(text, 'L', pw, freq);
+  const L = all.filter(m => m.lado === 'L');
+  const R = all.filter(m => m.lado === 'R');
+  return { L, R };
 };
 
 
@@ -556,8 +622,19 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
         const tipoEl = d.tipoEletrodo || tipoEletrodoGlobal;
         const pw0 = Object.values(parsed).flatMap(s=>Object.values(s)).flat()[0]?.pw || 60;
         const freq0 = Object.values(parsed).flatMap(s=>Object.values(s)).flat()[0]?.freq || 130;
-        const marcadoresL = parseThresholdText(d.thresholdL || '', 'L', pw0, freq0);
-        const marcadoresR = parseThresholdText(d.thresholdR || '', 'R', pw0, freq0);
+        // If thresholdL text contains side markers (Esquerdo/Direito), split automatically
+        const threshLText = d.thresholdL || '';
+        const threshRText = d.thresholdR || '';
+        const hasCombined = /esquerdo|direito/i.test(threshLText);
+        let marcadoresL, marcadoresR;
+        if (hasCombined) {
+          const both = parseThresholdBothSides(threshLText, pw0, freq0);
+          marcadoresL = both.L;
+          marcadoresR = both.R.concat(parseThresholdText(threshRText, 'R', pw0, freq0));
+        } else {
+          marcadoresL = parseThresholdText(threshLText, 'L', pw0, freq0);
+          marcadoresR = parseThresholdText(threshRText, 'R', pw0, freq0);
+        }
         return { nome, hc, date: parseDate(d.date||''), resumo:'',
                  evolution: d.evolution||'', programmingRaw: d.programming||'',
                  parsed, efeitosGrupos, tipoEletrodo: tipoEl,
@@ -990,29 +1067,43 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                   </button>
                 ))}
               </div>
-              {/* Threshold capture buttons */}
-              <div className="flex gap-2">
-                {[['thresholdL','🧪 Limiares E','violet'], ['thresholdR','🧪 Limiares D','violet']].map(([field, label, color]) => {
-                  const done = capturedForConsult[field] !== undefined;
-                  return (
-                    <button key={field}
-                      onClick={() => {
-                        const sel = window.getSelection();
-                        const txt = sel?.toString().trim() || '';
-                        if (txt) {
-                          setCaptured(prev => ({...prev, [consultIdx]: {...(prev[consultIdx]||{}), [field]: txt}}));
-                          sel.removeAllRanges();
-                        }
-                      }}
-                      className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold border transition-all ${
-                        done
-                          ? 'bg-violet-800/60 border-violet-600 text-violet-300'
-                          : 'bg-slate-800 border-slate-600 text-slate-400 hover:border-violet-500 hover:text-violet-300'
-                      }`}>
-                      {done ? '✓ ' : ''}{label}
-                    </button>
-                  );
-                })}
+              {/* Threshold input — select+capture OR direct textarea */}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex gap-2">
+                  {[['thresholdL','🧪 Limiares E'], ['thresholdR','🧪 Limiares D']].map(([field, label]) => {
+                    const done = (capturedForConsult[field] || '').trim().length > 0;
+                    return (
+                      <button key={field}
+                        onClick={() => {
+                          const sel = window.getSelection();
+                          const txt = sel?.toString().trim() || '';
+                          if (txt) {
+                            setCaptured(prev => ({...prev, [consultIdx]: {...(prev[consultIdx]||{}), [field]: txt}}));
+                            sel.removeAllRanges();
+                          }
+                        }}
+                        className={`flex-1 py-1 rounded-lg text-[10px] font-bold border transition-all ${
+                          done
+                            ? 'bg-violet-800/60 border-violet-600 text-violet-300'
+                            : 'bg-slate-800 border-slate-600 text-slate-400 hover:border-violet-500 hover:text-violet-300'
+                        }`}
+                        title="Selecione texto e clique para capturar">
+                        {done ? '✓ ' : ''}Capturar {label.replace('🧪 Limiares ','')}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex gap-2">
+                  {[['thresholdL','Limiares E — cole ou digite'], ['thresholdR','Limiares D — cole ou digite']].map(([field, placeholder]) => (
+                    <textarea key={field}
+                      value={capturedForConsult[field] || ''}
+                      onChange={e => setCaptured(prev => ({...prev, [consultIdx]: {...(prev[consultIdx]||{}), [field]: e.target.value}}))}
+                      placeholder={placeholder}
+                      rows={3}
+                      className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-[10px] text-violet-200 font-mono resize-none focus:outline-none focus:ring-1 focus:ring-violet-500 placeholder-slate-600 leading-relaxed"
+                    />
+                  ))}
+                </div>
               </div>
               <button onClick={nextConsult}
                 className="w-full bg-emerald-500 hover:bg-emerald-400 text-white font-black py-2.5 rounded-lg text-sm transition-all shadow-md">
