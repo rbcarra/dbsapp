@@ -76,11 +76,87 @@ const parseParams = (seg) => {
     }
   }
 
-  return { contatos: extractContacts(seg), amp, pw: resolvedPw, freq: resolvedFreq };
+  // Extract inline impedance: bare number 400-9999 that wasn't claimed by amp/pw/freq
+  let impedancia = null;
+  const impInline = getParam(seg, ['\\bimp(?:edân?cia)?\\b', '\\bimpedance\\b']);
+  if (impInline !== null && impInline >= 400 && impInline <= 9999) {
+    impedancia = Math.round(impInline);
+  } else {
+    // Bare number 400-9999 not matched by amp/pw/freq
+    const bareRe = /(?<![,\d])(\d{3,4})(?![,\d])/g;
+    let bm;
+    while ((bm = bareRe.exec(seg)) !== null) {
+      const v = parseInt(bm[1]);
+      if (v >= 400 && v <= 9999 && Math.abs(v - amp) > 1 && v !== resolvedPw && v !== resolvedFreq) {
+        impedancia = v; break;
+      }
+    }
+  }
+
+  return { contatos: extractContacts(seg), amp, pw: resolvedPw, freq: resolvedFreq, impedancia };
 };
 
-// Line-by-line state machine
-// Correção 1: aceita "E 0-00 ...", "D 0-00 ...", "Lead1 ...", "Lead2 ..."
+// ─── BATTERY + IMPEDANCE EXTRACTION ─────────────────────────────────────
+// Scans the whole text block for battery voltage and impedance values
+
+const extractBatteryImpedance = (fullText) => {
+  if (!fullText) return { bateria: null, impedanciaL: null, impedanciaR: null };
+
+  // Battery: "bateria 2.9v", "bateria: 2,9V", "bat 3.1 v", "IPG 2.9V"
+  let bateria = null;
+  const batMatch = fullText.match(
+    /(?:bateria|batter[yi]|bat|ipg)\s*[:\-]?\s*([0-9]+[.,][0-9]+|[0-9]+)\s*[Vv]/i
+  );
+  if (batMatch) bateria = parseFloat(batMatch[1].replace(',', '.'));
+
+  // Impedance — several formats:
+  //   "imp 1234", "impedancia 1234", "impedância: 1234"
+  //   "Imp E 1234 D 5678"  (paired)
+  //   bare number 400-9999 on a lead line (handled per-line in parseProgramming)
+  // Here we look for global/session-level mentions
+
+  let impedanciaL = null;
+  let impedanciaR = null;
+
+  // Paired: "Imp E 1234 / D 5678" or "ImpE: 1234 ImpD: 5678"
+  const pairedMatch = fullText.match(
+    /imp(?:edân?cia)?\s*[Ee]\s*[:\-]?\s*([0-9]{3,5})\s*[\/,]?\s*[Dd]\s*[:\-]?\s*([0-9]{3,5})/i
+  );
+  if (pairedMatch) {
+    impedanciaL = pairedMatch[1];
+    impedanciaR = pairedMatch[2];
+  }
+
+  // Single mentions near side keywords
+  // "Impedância Esquerdo: 1234" / "Imp E 1234" / "imp esq 1234"
+  if (!impedanciaL) {
+    const impLMatch = fullText.match(
+      /imp(?:edân?cia)?\s*(?:esq(?:uerdo)?|left|e)\s*[:\-]?\s*([0-9]{3,5})/i
+    );
+    if (impLMatch) impedanciaL = impLMatch[1];
+  }
+  if (!impedanciaR) {
+    const impRMatch = fullText.match(
+      /imp(?:edân?cia)?\s*(?:dir(?:eito)?|right|d)\s*[:\-]?\s*([0-9]{3,5})/i
+    );
+    if (impRMatch) impedanciaR = impRMatch[1];
+  }
+
+  // Single global impedance (no side specified) → assign to both or L
+  if (!impedanciaL && !impedanciaR) {
+    const impGlobal = fullText.match(
+      /(?:imp(?:edân?cia)?|impedance)\s*[:\-]?\s*([0-9]{3,5})/i
+    );
+    if (impGlobal) {
+      impedanciaL = impGlobal[1];
+      impedanciaR = impGlobal[1];
+    }
+  }
+
+  return { bateria, impedanciaL, impedanciaR };
+};
+
+// ─── PROGRAMMING PARSER ───────────────────────────────────────────────────
 const parseProgramming = (rawText) => {
   if (!rawText) return {};
   const result = {};
@@ -96,8 +172,11 @@ const parseProgramming = (rawText) => {
     const line = rawLine.trim();
     if (!line) continue;
 
-    // Group header: "Grupo A", "Grupo 1", "GRUPO B (EM USO...)", "GRUPO C:"
-    const gm = line.match(/^grupo\s+([a-dA-D1-4])\b/i);
+    // Group header: "Grupo A", "GRUPO B (EM USO...)", "A:", "A- SEGURANÇA", bare "B"/"C"/"D"
+    const gm =
+      line.match(/^grupo\s+([a-dA-D1-4])\b/i) ||   // "Grupo A", "GRUPO B ..."
+      line.match(/^([a-dA-D1-4])\s*[-:.]/) ||       // "A:", "A-", "A."
+      line.match(/^([a-dA-D1-4])\s*$/);             // bare "B" on its own line
     if (gm) {
       const g = gm[1].toUpperCase();
       currentGroup = {'1':'A','2':'B','3':'C','4':'D'}[g] || g;
@@ -635,9 +714,19 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
           marcadoresL = parseThresholdText(threshLText, 'L', pw0, freq0);
           marcadoresR = parseThresholdText(threshRText, 'R', pw0, freq0);
         }
+        // Extract battery and impedance from evolution + programming text
+        const fullBlock = [d.date||'', d.evolution||'', d.programming||''].join(' ');
+        const { bateria, impedanciaL, impedanciaR } = extractBatteryImpedance(fullBlock);
+        // Also pick up per-lead impedance from parsed progs if available
+        const impLFromProg = Object.values(parsed).flatMap(s=>(s.L||[])).find(p=>p.impedancia)?.impedancia;
+        const impRFromProg = Object.values(parsed).flatMap(s=>(s.R||[])).find(p=>p.impedancia)?.impedancia;
+
         return { nome, hc, date: parseDate(d.date||''), resumo:'',
                  evolution: d.evolution||'', programmingRaw: d.programming||'',
                  parsed, efeitosGrupos, tipoEletrodo: tipoEl,
+                 voltagemBateria: bateria !== null ? String(bateria) : '',
+                 impedanciaL: impedanciaL || (impLFromProg ? String(impLFromProg) : ''),
+                 impedanciaR: impedanciaR || (impRFromProg ? String(impRFromProg) : ''),
                  marcadoresClinicosL: marcadoresL,
                  marcadoresClinicosR: marcadoresR };
       });
@@ -1151,7 +1240,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
             <table className="w-full text-xs border-collapse">
               <thead className="sticky top-0 z-10 bg-slate-900 border-b border-slate-700">
                 <tr>
-                  {['#','Data','Eletrodo','Lead E','Lead D','Evolução','Efeito','Limiares E','Limiares D','Status'].map(h => (
+                  {['#','Data','Eletrodo','Bat.(V)','Imp.E','Imp.D','Lead E','Lead D','Evolução','Efeito','Limiares E','Limiares D','Status'].map(h => (
                     <th key={h} className="text-left px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -1219,6 +1308,24 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                           className="bg-slate-800 border border-slate-600 rounded px-1.5 py-1 text-slate-300 text-[10px] focus:outline-none focus:ring-1 focus:ring-indigo-500">
                           {TIPOS_ELETRODO_EXTRATOR.map(t => <option key={t} value={t}>{t}</option>)}
                         </select>
+                      </td>
+                      {/* Battery */}
+                      <td className="px-3 py-2">
+                        <input value={r.voltagemBateria || ''} onChange={e=>updateReviewed(ri,'voltagemBateria',e.target.value)}
+                          className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-amber-300 w-14 text-[10px] focus:outline-none focus:ring-1 focus:ring-amber-500"
+                          placeholder="V" title="Bateria (V)"/>
+                      </td>
+                      {/* Impedance L */}
+                      <td className="px-3 py-2">
+                        <input value={r.impedanciaL || ''} onChange={e=>updateReviewed(ri,'impedanciaL',e.target.value)}
+                          className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-sky-300 w-14 text-[10px] focus:outline-none focus:ring-1 focus:ring-sky-500"
+                          placeholder="Ω" title="Impedância E"/>
+                      </td>
+                      {/* Impedance R */}
+                      <td className="px-3 py-2">
+                        <input value={r.impedanciaR || ''} onChange={e=>updateReviewed(ri,'impedanciaR',e.target.value)}
+                          className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-sky-300 w-14 text-[10px] focus:outline-none focus:ring-1 focus:ring-sky-500"
+                          placeholder="Ω" title="Impedância D"/>
                       </td>
                       <td className="px-3 py-2">{renderLeadCell('L')}</td>
                       <td className="px-3 py-2">{renderLeadCell('R')}</td>

@@ -1365,7 +1365,10 @@ ${progTexto}Avaliação: ${textoEfeito}
               <div className="flex gap-4 flex-1">
                 {programasL.map((prog, idx) => {
                   const configStr = getStringConfig(prog.contatos, !considerarAmplitude);
-                  const hist = configStr ? historicoReal.filter(h => h.lado === 'L' && h.config === configStr) : [];
+                  const stimTypeForHist = classifyStim(prog.contatos, tipoEletrodo);
+                  const hist = stimTypeForHist === 'multi-dir'
+                    ? historicoReal.filter(h => h.lado === 'L')
+                    : (configStr ? historicoReal.filter(h => h.lado === 'L' && h.config === configStr) : []);
                   const isMatch = historicoReal.some(h => h.lado === 'L' && h.config === configStr && h.amp === prog.amp && h.pw === prog.pw && h.freq === prog.freq);
                   const stimType = classifyStim(prog.contatos, tipoEletrodo);
                   const currentLevel = getDirLevel(configStr);
@@ -1420,7 +1423,10 @@ ${progTexto}Avaliação: ${textoEfeito}
               <div className="flex gap-4 flex-1">
                 {programasR.map((prog, idx) => {
                   const configStr = getStringConfig(prog.contatos, !considerarAmplitude);
-                  const hist = configStr ? historicoReal.filter(h => h.lado === 'R' && h.config === configStr) : [];
+                  const stimTypeForHistR = classifyStim(prog.contatos, tipoEletrodo);
+                  const hist = stimTypeForHistR === 'multi-dir'
+                    ? historicoReal.filter(h => h.lado === 'R')
+                    : (configStr ? historicoReal.filter(h => h.lado === 'R' && h.config === configStr) : []);
                   const isMatch = historicoReal.some(h => h.lado === 'R' && h.config === configStr && h.amp === prog.amp && h.pw === prog.pw && h.freq === prog.freq);
                   const stimTypeR = classifyStim(prog.contatos, tipoEletrodo);
                   const currentLevelR = getDirLevel(configStr);
@@ -1749,6 +1755,9 @@ ${progTexto}Avaliação: ${textoEfeito}
                   clinica: '',
                   type: 'active',
                   importadoViaExtrator: true,
+                  voltagemBateria: row.voltagemBateria || '',
+                  impedanciaL: row.impedanciaL || '',
+                  impedanciaR: row.impedanciaR || '',
                   marcadoresClinicosL: row.marcadoresClinicosL || [],
                   marcadoresClinicosR: row.marcadoresClinicosR || [],
                   efeitosColaterais: { L: [], R: [] },
