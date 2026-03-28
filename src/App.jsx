@@ -601,7 +601,7 @@ const PolarDisplay2D = ({ marcadores, maxAmp, grupoKey, sessaoAtualTimestamp, pr
     <div className="flex flex-col items-center gap-0.5">
       {labelGrupo && <span className="text-[8px] text-slate-500 font-mono">{labelGrupo}</span>}
       <div className="relative cursor-pointer" onClick={() => setIsZoomed(!isZoomed)} title="Clique para ampliar">
-        <svg width={S} height={S} viewBox={String.raw\`0 0 \${S} \${S}\`}>
+        <svg width={S} height={S} viewBox={`0 0 ${S} ${S}`}>
           <rect width={S} height={S} fill="#ffffff" rx="8"/>
           {rings.map(v => (
             <g key={v}>
@@ -640,7 +640,7 @@ const PolarDisplay2D = ({ marcadores, maxAmp, grupoKey, sessaoAtualTimestamp, pr
             const opacity = Math.max(0.4, opacidadeMarcador(m.sessionTimestamp || m.timestamp || 0, sessaoAtualTimestamp || Date.now()));
             return (
               <g key={mi} opacity={opacity}>
-                <title>{String.raw\`\${m.tipo} | \${m.amp}mA | \${m.freq}Hz | PW:\${m.pw}\`}</title>
+                <title>{`${m.tipo} | ${m.amp}mA | ${m.freq}Hz | PW:${m.pw}`}</title>
                 <circle cx={px} cy={py} r={markerR} fill={fill} fillOpacity={0.3} stroke={fill} strokeWidth={1.5}/>
                 <text x={px} y={py} textAnchor="middle" dominantBaseline="middle" fontSize={Math.max(6, S*0.045)} fill="#fff" fontWeight="bold" stroke={fill} strokeWidth={0.3}>{info.letra}</text>
               </g>
@@ -671,7 +671,7 @@ const DirectionalHistorico = ({ marcadores, maxAmp, sessaoAtualTimestamp, progra
         <PolarDisplay2D key={k}
           marcadores={byGroup[k]}
           maxAmp={maxAmp}
-          labelGrupo={String.raw\`\${k}\${labelPrefix}\`}
+          labelGrupo={`${k}${labelPrefix}`}
           sessaoAtualTimestamp={sessaoAtualTimestamp}
           programaContatos={programaContatos}
           ampAtual={ampAtual}
@@ -752,7 +752,7 @@ const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContat
     const allLevels = [...new Set([...multiDir,...singleDir].flatMap(m => Object.keys(parseConfigToContatos(m.config)).map(k=>k[0])))];
     const ringMks = marcadoresRingExtras.filter(m => String(agruparPorFreq ? (m.freq||130) : (m.pw||60)) === grpKey);
     return (
-      <svg key={String.raw\`\${grpKey}-\${showSchematic}\`} width={S} height={S} viewBox={String.raw\`0 0 \${S} \${S}\`}>
+      <svg key={`${grpKey}-${showSchematic}`} width={S} height={S} viewBox={`0 0 ${S} ${S}`}>
         <rect width={S} height={S} fill="#ffffff" rx="6"/>
         {rings.map(v => (
           <circle key={v} cx={C} cy={C} r={toR(v)} fill="none"
@@ -777,8 +777,8 @@ const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContat
           const opacity = Math.max(0.4, opacidadeMarcador(m.sessionTimestamp||m.timestamp||0, sessaoAtualTimestamp||Date.now()));
           const rRing = toR(m.amp||0);
           return (
-            <g key={String.raw\`ring-\${mi}\`} opacity={opacity}>
-              <title>{String.raw\`[ring] \${m.tipo} | \${m.amp}mA\`}</title>
+            <g key={`ring-${mi}`} opacity={opacity}>
+              <title>{`[ring] ${m.tipo} | ${m.amp}mA`}</title>
               <circle cx={C} cy={C} r={rRing} fill="none" stroke={fill} strokeWidth={1.5} strokeDasharray="2,2" opacity={0.5}/>
               <text x={C+rRing*0.707+2} y={C-rRing*0.707-2} textAnchor="middle" fontSize={Math.max(5,S*0.04)} fill={fill} fontWeight="bold">{info.letra}</text>
             </g>
@@ -796,8 +796,8 @@ const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContat
           const fill=isPos?'#059669':'#e11d48';
           const opacity=Math.max(0.4,opacidadeMarcador(m.sessionTimestamp||m.timestamp||0,sessaoAtualTimestamp||Date.now()));
           return (
-            <g key={String.raw\`sd-\${mi}\`} opacity={opacity*0.7}>
-              <title>{String.raw\`[single] \${m.tipo} | \${m.amp}mA\`}</title>
+            <g key={`sd-${mi}`} opacity={opacity*0.7}>
+              <title>{`[single] ${m.tipo} | ${m.amp}mA`}</title>
               <circle cx={svgX} cy={svgY} r={Math.max(3,S*0.025)} fill={fill} fillOpacity={0.2} stroke={fill} strokeWidth={1} strokeDasharray="1,1"/>
               <text x={svgX} y={svgY} textAnchor="middle" dominantBaseline="middle" fontSize={Math.max(5,S*0.038)} fill="#fff" fontWeight="bold" stroke={fill} strokeWidth={0.3}>{info.letra}</text>
             </g>
@@ -816,8 +816,8 @@ const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContat
           const markerR=Math.max(3.5,S*0.031);
           const opacity=Math.max(0.4,opacidadeMarcador(m.sessionTimestamp||m.timestamp||0,sessaoAtualTimestamp||Date.now()));
           return (
-            <g key={String.raw\`md-\${mi}\`} opacity={opacity}>
-              <title>{String.raw\`\${m.tipo} | \${m.amp}mA | \${m.freq}Hz\`}</title>
+            <g key={`md-${mi}`} opacity={opacity}>
+              <title>{`${m.tipo} | ${m.amp}mA | ${m.freq}Hz`}</title>
               <circle cx={svgX} cy={svgY} r={markerR} fill={fill} fillOpacity={0.3} stroke={fill} strokeWidth={1.5}/>
               <text x={svgX} y={svgY} textAnchor="middle" dominantBaseline="middle" fontSize={Math.max(6,S*0.045)} fill="#fff" fontWeight="bold" stroke={fill} strokeWidth={0.3}>{info.letra}</text>
             </g>
