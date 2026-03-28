@@ -3,7 +3,7 @@ import { MARCADOR_LETRAS, opacidadeMarcador, formatarData } from './constants';
 import { DIR_ANGLES, parseConfigToContatos, classifyStim, getDirLevel,
   dirUnitVector2D, calcAmpEfetiva, dirVector3D } from './vectorHelpers';
 
-const PolarDisplay2D = ({ marcadores, maxAmp, grupoKey, sessaoAtualTimestamp, programaContatos, ampAtual, labelGrupo, mostrarPositivos = true, mostrarNegativos = true, mostrarPrevios = true }) => {
+const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp, grupoKey, sessaoAtualTimestamp, programaContatos, ampAtual, labelGrupo, mostrarPositivos = true, mostrarNegativos = true, mostrarPrevios = true }) => {
   const [isZoomed, setIsZoomed] = React.useState(false);
   const S = isZoomed ? 300 : 160;
   const C = S / 2, margin = S * 0.14, R = C - margin;
@@ -44,6 +44,24 @@ const PolarDisplay2D = ({ marcadores, maxAmp, grupoKey, sessaoAtualTimestamp, pr
               stroke="#6366f1" strokeWidth={2} strokeDasharray="4,3" opacity={0.5}/>
           )}
           <circle cx={C} cy={C} r={Math.max(2, S*0.015)} fill="#334155"/>
+
+          {/* Indicadores de programação prévia — bolinhas coloridas por efeito */}
+          {mostrarPrevios && (historicoRef || []).map((h, hi) => {
+            const hContatos = parseConfigToContatos(h.config);
+            const { ux, uy } = dirUnitVector2D(hContatos);
+            const ampEf = calcAmpEfetiva(hContatos, h.amp || 0);
+            const r = toR(ampEf);
+            const px = C + ux * r, py = C - uy * r;
+            const cor = h.efeito === 'bom' ? '#10b981' : h.efeito === 'ruim' ? '#f43f5e' : h.efeito === 'pouco' ? '#94a3b8' : '#67e8f9';
+            const opacity = Math.max(0.4, opacidadeMarcador(h.date || 0, sessaoAtualTimestamp || Date.now()));
+            return (
+              <g key={`hist-${hi}`} opacity={opacity}>
+                <title>{`${h.config} | ${h.amp}mA | ${h.freq}Hz | ${h.efeito}`}</title>
+                <circle cx={px} cy={py} r={Math.max(4, S * 0.033)}
+                  fill={cor} fillOpacity={0.25} stroke={cor} strokeWidth={1.5}/>
+              </g>
+            );
+          })}
           {marcadores.filter(m => {
             const isPos = ['tremor','rigidez','bradicinesia'].includes(m.tipo);
             if (isPos && !mostrarPositivos) return false;
@@ -75,16 +93,24 @@ const PolarDisplay2D = ({ marcadores, maxAmp, grupoKey, sessaoAtualTimestamp, pr
   );
 };
 
-const DirectionalHistorico = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq }) => {
+const DirectionalHistorico = ({ marcadores, historicoRef, maxAmp, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq }) => {
   const [mostrarPositivos, setMostrarPositivos] = React.useState(true);
   const [mostrarNegativos, setMostrarNegativos] = React.useState(true);
+  const [mostrarPrevios, setMostrarPrevios] = React.useState(true);
   const byGroup = {};
   marcadores.forEach(m => {
     const key = String(agruparPorFreq ? (m.freq || 130) : (m.pw || 60));
     if (!byGroup[key]) byGroup[key] = [];
     byGroup[key].push({ ...m, _contatos: parseConfigToContatos(m.config) });
   });
-  const keys = Object.keys(byGroup).sort((a, b) => +a - +b);
+  // Also group historicoRef by the same key so each PolarDisplay2D gets the right slice
+  const histByGroup = {};
+  (historicoRef || []).forEach(h => {
+    const key = String(agruparPorFreq ? (h.freq || 130) : (h.pw || 60));
+    if (!histByGroup[key]) histByGroup[key] = [];
+    histByGroup[key].push(h);
+  });
+  const keys = [...new Set([...Object.keys(byGroup), ...Object.keys(histByGroup)])].sort((a, b) => +a - +b);
   const labelPrefix = agruparPorFreq ? 'Hz' : 'µs';
 
   return (
@@ -98,6 +124,10 @@ const DirectionalHistorico = ({ marcadores, maxAmp, sessaoAtualTimestamp, progra
           <input type="checkbox" checked={mostrarNegativos} onChange={e => setMostrarNegativos(e.target.checked)} className="accent-rose-500 w-3 h-3"/>
           <span className="text-[8px] text-rose-600">Colaterais</span>
         </label>
+        <label className="flex items-center gap-0.5 cursor-pointer">
+          <input type="checkbox" checked={mostrarPrevios} onChange={e => setMostrarPrevios(e.target.checked)} className="accent-slate-500 w-3 h-3"/>
+          <span className="text-[8px] text-slate-500">Prev</span>
+        </label>
       </div>
       {keys.length === 0 ? (
         <div className="text-[9px] text-slate-600 italic px-1">Sem marcadores neste nível direcional</div>
@@ -105,7 +135,8 @@ const DirectionalHistorico = ({ marcadores, maxAmp, sessaoAtualTimestamp, progra
         <div className="flex gap-2 flex-wrap px-1">
           {keys.map(k => (
             <PolarDisplay2D key={k}
-              marcadores={byGroup[k]}
+              marcadores={byGroup[k] || []}
+              historicoRef={histByGroup[k] || []}
               maxAmp={maxAmp}
               labelGrupo={`${k}${labelPrefix}`}
               sessaoAtualTimestamp={sessaoAtualTimestamp}
@@ -113,6 +144,7 @@ const DirectionalHistorico = ({ marcadores, maxAmp, sessaoAtualTimestamp, progra
               ampAtual={ampAtual}
               mostrarPositivos={mostrarPositivos}
               mostrarNegativos={mostrarNegativos}
+              mostrarPrevios={mostrarPrevios}
             />
           ))}
         </div>
@@ -121,7 +153,7 @@ const DirectionalHistorico = ({ marcadores, maxAmp, sessaoAtualTimestamp, progra
   );
 };
 
-const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq, marcadoresRing }) => {
+const TripleView3D = ({ marcadores, historicoRef, maxAmp, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq, marcadoresRing }) => {
   const [isZoomed, setIsZoomed] = React.useState(false);
   const [mostrarRing, setMostrarRing] = React.useState(true);
   const [mostrarSingleDir, setMostrarSingleDir] = React.useState(true);
@@ -182,9 +214,18 @@ const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContat
     if (marcadores.includes(m)) byGroup[key].multiDir.push(m);
     else byGroup[key].singleDir.push(m);
   });
+  // Group historicoRef by PW/Freq
+  const histByGroup3D = {};
+  (historicoRef || []).forEach(h => {
+    const key = String(agruparPorFreq ? (h.freq || 130) : (h.pw || 60));
+    if (!histByGroup3D[key]) histByGroup3D[key] = [];
+    histByGroup3D[key].push(h);
+  });
+
   const allKeys = [...new Set([
     ...Object.keys(byGroup),
-    ...marcadoresRingExtras.map(m => String(agruparPorFreq ? (m.freq || 130) : (m.pw || 60)))
+    ...marcadoresRingExtras.map(m => String(agruparPorFreq ? (m.freq || 130) : (m.pw || 60))),
+    ...Object.keys(histByGroup3D)
   ])].sort((a, b) => +a - +b);
   allKeys.forEach(k => { if (!byGroup[k]) byGroup[k] = { multiDir: [], singleDir: [] }; });
 
@@ -224,19 +265,28 @@ const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContat
       dirLabels: [{ letter: 'B', lx: -1, ly: 0 }, { letter: 'C', lx: 0.87, ly: 0 }] },
   ];
 
-  const renderOneSVG = (grpKey, { multiDir, singleDir }, showSchematic, getXY, dirLabels) => {
+  // Helper: for each marker/item, compute its own Z-origin in SVG coords for XZ/YZ views
+  // This allows each point to emanate from its actual charge-center height on the electrode
+  const itemOriginY = (config, isZView) => {
+    if (!isZView) return C; // XY view: flat, always center
+    const contatos = parseConfigToContatos(config);
+    return zToSvg(calcZCenter(contatos));
+  };
+
+  const renderOneSVG = (grpKey, { multiDir, singleDir }, histItems, showSchematic, getXY, dirLabels) => {
     const allLevels = [...new Set([...multiDir, ...singleDir].flatMap(m =>
       Object.keys(parseConfigToContatos(m.config)).map(k => k[0])))];
     const ringMks = marcadoresRingExtras.filter(m =>
       String(agruparPorFreq ? (m.freq || 130) : (m.pw || 60)) === grpKey);
 
-    // Bug 2: origin point for vectors — (C, zOriginSvg) for Z projections, (C, C) for XY
+    // Global origin = current program's charge center (for electrode, rings, stim line)
     const originX = C;
     const originY = showSchematic ? zOriginSvg : C;
 
     return (
       <svg key={`${grpKey}-${showSchematic}`} width={S} height={S} viewBox={`0 0 ${S} ${S}`}>
         <rect width={S} height={S} fill="#ffffff" rx="6"/>
+        {/* Grid rings centered on current program origin */}
         {rings.map(v => (
           <circle key={v} cx={C} cy={originY} r={toR(v)} fill="none"
             stroke={v === Math.ceil(maxAmp) ? '#475569' : '#e2e8f0'}
@@ -251,9 +301,8 @@ const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContat
             textAnchor="middle" dominantBaseline="middle"
             fontSize={Math.max(7, S * 0.055)} fontWeight="bold" fill="#1e293b">{letter}</text>;
         })}
-        {/* Bug 1: electrode at origin */}
         {showSchematic && <ElectrodeSchematic highlightLevels={allLevels}/>}
-        {/* Current stim line from origin */}
+        {/* Current stim line from its own origin */}
         {curVec && (() => {
           const { px: cux, py: cuy } = getXY(curVec);
           const cr = toR(curVec.amp || 0);
@@ -262,8 +311,9 @@ const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContat
             stroke="#6366f1" strokeWidth={2} strokeDasharray="4,3" opacity={0.5}/> : null;
         })()}
         <circle cx={originX} cy={originY} r={Math.max(2, S * 0.015)} fill="#334155"/>
-        {/* Ring markers: concentric rings from origin */}
+        {/* Ring markers: concentric rings — centered on marker's own Z-origin */}
         {ringMks.filter(m => filterMarcador(m, false)).map((m, mi) => {
+          const mOY = itemOriginY(m.config, showSchematic);
           const isPos = ['tremor', 'rigidez', 'bradicinesia'].includes(m.tipo);
           const info = MARCADOR_LETRAS[m.tipo] || { letra: '?' };
           const fill = isPos ? '#059669' : '#e11d48';
@@ -272,19 +322,20 @@ const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContat
           return (
             <g key={`ring-${mi}`} opacity={opacity}>
               <title>{`[ring] ${m.tipo} | ${m.amp}mA`}</title>
-              <circle cx={originX} cy={originY} r={rRing} fill="none" stroke={fill} strokeWidth={1.5} strokeDasharray="2,2" opacity={0.5}/>
-              <text x={originX + rRing * 0.707 + 2} y={originY - rRing * 0.707 - 2}
+              <circle cx={originX} cy={mOY} r={rRing} fill="none" stroke={fill} strokeWidth={1.5} strokeDasharray="2,2" opacity={0.5}/>
+              <text x={originX + rRing * 0.707 + 2} y={mOY - rRing * 0.707 - 2}
                 textAnchor="middle" fontSize={Math.max(5, S * 0.04)} fill={fill} fontWeight="bold">{info.letra}</text>
             </g>
           );
         })}
-        {/* Single-dir extras */}
+        {/* Single-dir extras — each from its own Z-origin */}
         {singleDir.filter(m => filterMarcador(m, false)).map((m, mi) => {
           const c = parseConfigToContatos(m.config);
           const vec = dirVector3D(c, m.amp || 0);
           const { px: ux, py: uy } = getXY(vec);
           const r = toR(vec.amp || 0);
-          const svgX = originX + ux * r, svgY = originY - uy * r;
+          const mOY = itemOriginY(m.config, showSchematic);
+          const svgX = originX + ux * r, svgY = mOY - uy * r;
           const isPos = ['tremor', 'rigidez', 'bradicinesia'].includes(m.tipo);
           const info = MARCADOR_LETRAS[m.tipo] || { letra: '?' };
           const fill = isPos ? '#059669' : '#e11d48';
@@ -298,13 +349,14 @@ const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContat
             </g>
           );
         })}
-        {/* Multi-dir markers */}
+        {/* Multi-dir markers — each from its own Z-origin */}
         {multiDir.filter(m => filterMarcador(m, true)).map((m, mi) => {
           const c = parseConfigToContatos(m.config);
           const vec = dirVector3D(c, m.amp || 0);
           const { px: ux, py: uy } = getXY(vec);
           const r = toR(vec.amp || 0);
-          const svgX = originX + ux * r, svgY = originY - uy * r;
+          const mOY = itemOriginY(m.config, showSchematic);
+          const svgX = originX + ux * r, svgY = mOY - uy * r;
           const isPos = ['tremor', 'rigidez', 'bradicinesia'].includes(m.tipo);
           const info = MARCADOR_LETRAS[m.tipo] || { letra: '?' };
           const fill = isPos ? '#059669' : '#e11d48';
@@ -316,6 +368,26 @@ const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContat
               <circle cx={svgX} cy={svgY} r={markerR} fill={fill} fillOpacity={0.3} stroke={fill} strokeWidth={1.5}/>
               <text x={svgX} y={svgY} textAnchor="middle" dominantBaseline="middle"
                 fontSize={Math.max(6, S * 0.045)} fill="#fff" fontWeight="bold" stroke={fill} strokeWidth={0.3}>{info.letra}</text>
+            </g>
+          );
+        })}
+        {/* Indicadores de programação prévia — each from its own Z-origin */}
+        {mostrarPrevios && histItems.map((h, hi) => {
+          const hContatos = parseConfigToContatos(h.config);
+          const hVec = dirVector3D(hContatos, h.amp || 0);
+          const { px: hux, py: huy } = getXY(hVec);
+          const hr = toR(hVec.amp || 0);
+          const hOY = itemOriginY(h.config, showSchematic);
+          const hx = originX + hux * hr, hy = hOY - huy * hr;
+          const cor = h.efeito === 'bom' ? '#10b981'
+            : h.efeito === 'ruim' ? '#f43f5e'
+            : h.efeito === 'pouco' ? '#94a3b8' : '#67e8f9';
+          const opacity = Math.max(0.35, opacidadeMarcador(h.date || 0, sessaoAtualTimestamp || Date.now()));
+          return (
+            <g key={`previo-${hi}`} opacity={opacity}>
+              <title>{`Prev: ${h.config} | ${h.amp}mA | ${h.efeito}`}</title>
+              <circle cx={hx} cy={hy} r={Math.max(3.5, S * 0.028)}
+                fill={cor} fillOpacity={0.3} stroke={cor} strokeWidth={1.5}/>
             </g>
           );
         })}
@@ -362,7 +434,7 @@ const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContat
             {projections.map(({ label, showSchematic, getXY, dirLabels }) => (
               <div key={label} className="flex flex-col items-center gap-0.5">
                 <span className="text-[7px] text-slate-500">{label}</span>
-                {renderOneSVG(grpKey, byGroup[grpKey], showSchematic, getXY, dirLabels)}
+                {renderOneSVG(grpKey, byGroup[grpKey], histByGroup3D[grpKey] || [], showSchematic, getXY, dirLabels)}
               </div>
             ))}
           </div>
@@ -600,9 +672,9 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, is
       );
 
       if (stimType === 'single-dir') {
-        return <>{toggleBar}<DirectionalHistorico marcadores={marcadores} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq}/></>;
+        return <>{toggleBar}<DirectionalHistorico marcadores={marcadores} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq}/></>;
       } else if (stimType === 'multi-dir') {
-        return <>{toggleBar}<TripleView3D marcadores={marcadores} marcadoresRing={marcadoresRing} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq}/></>;
+        return <>{toggleBar}<TripleView3D marcadores={marcadores} marcadoresRing={marcadoresRing} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq}/></>;
       } else {
         return <>{toggleBar}<TimelineHistorico historicoRef={historicoRef} maxAmp={max} marcadores={marcadores} sessaoAtualTimestamp={sessaoAtualTimestamp} agruparPorFreq={agruparPorFreq}/></>;
       }
