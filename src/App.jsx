@@ -470,16 +470,14 @@ const VisualizadorEletrodo = ({ lado, tipoEletrodo, contatos, onChangeState, onC
                           onPointerDown={(e) => e.stopPropagation()}
                         >
                           <label className="text-[10px] font-bold text-slate-500 uppercase mb-2 block">Corrente {label}</label>
-                          <div className="flex items-center gap-2 mb-2">
-                            <input
-                              type="number" min="0" max="100" step="5"
-                              value={contato.perc}
-                              onChange={(e) => onChangePerc(chave, Math.min(100, Math.max(0, parseInt(e.target.value)||0)))}
-                              className="w-16 text-center font-bold text-sm text-indigo-700 bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-indigo-400 px-1 py-0.5"
-                            />
-                            <span className="text-xs font-bold text-slate-500">%</span>
-                          </div>
-                          <div className="flex justify-end">
+                          <input 
+                            type="range" min="0" max="100" step="5"
+                            value={contato.perc}
+                            onChange={(e) => onChangePerc(chave, parseInt(e.target.value))}
+                            className="w-full accent-indigo-600 mb-2 cursor-pointer"
+                          />
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs font-bold text-indigo-700">{contato.perc}%</span>
                             <button onClick={() => setEditandoMICC(null)} className="text-[10px] bg-slate-100 px-3 py-1 rounded font-bold hover:bg-slate-200">OK</button>
                           </div>
                         </div>
@@ -540,186 +538,111 @@ const classifyStim = (contatos, tipoEletrodo) => {
   return 'multi-dir';
 };
 
-// Calcula vetor 2D e amplitude efetiva
-// Fix 1: catodo contribui negativamente (vetor aponta PARA o catodo)
-// Fix 2: sem perc explícita, divide 100% pelo nº de contatos do mesmo estado
-// Fix 3: anodo reduz amplitude efetiva em 0.6 * percentual_anodo
+// ─── DIRECTIONAL VECTOR HELPERS ─────────────────────────────────────────────
+
+// Fix direção: ambos catodo E anodo contribuem positivamente para a direção
+// (vetor = centro ponderado de TODOS os contatos direcionais ativos)
+// Isso garante: catodo 1A → vetor para A; catodo 1A + anodo 1B (50/50) → vetor a 150° (médio entre A e B)
 const dirUnitVector2D = (contatos) => {
-  // Agrupar catodos e anodos para redistribuir perc se não definida
-  const catodos = Object.entries(contatos).filter(([k,v]) => v.state === '-' && /[ABC]$/.test(k));
-  const anodos  = Object.entries(contatos).filter(([k,v]) => v.state === '+' && /[ABC]$/.test(k));
-
-  const percEfetivo = (v, grupoPares) => {
-    // Se perc já foi definida explicitamente (não é o default 100 com outros no grupo), usa ela
-    // Detectamos ausência de definição explícita: todos no grupo com perc===100
-    const todosDefault = grupoPares.every(([,c]) => c.perc === 100 || c.perc === undefined);
-    if (todosDefault && grupoPares.length > 1) return 100 / grupoPares.length;
-    return v.perc ?? 100;
-  };
-
   let vx = 0, vy = 0;
-  catodos.forEach(([k, v]) => {
-    const perc = percEfetivo(v, catodos) / 100;
+  Object.entries(contatos).forEach(([k, v]) => {
+    if (v.state === 'off' || !k.match(/[ABC]$/)) return;
+    const perc = (v.perc ?? 100) / 100;
     const letter = k.slice(-1);
     const rad = DIR_ANGLES[letter] * Math.PI / 180;
-    // Fix 1: catodo → vetor aponta para o contato (sinal negativo = direção do catodo)
-    vx += -perc * Math.cos(rad);
-    vy += -perc * Math.sin(rad);
-  });
-  anodos.forEach(([k, v]) => {
-    const perc = percEfetivo(v, anodos) / 100;
-    const letter = k.slice(-1);
-    const rad = DIR_ANGLES[letter] * Math.PI / 180;
-    // anodo contribui positivamente (vetor se afasta do anodo)
+    // Ambos catodo e anodo contribuem na direção do contato
     vx += perc * Math.cos(rad);
     vy += perc * Math.sin(rad);
   });
-
   const rawMag = Math.sqrt(vx * vx + vy * vy);
   const mag = rawMag || 1;
   return { ux: vx / mag, uy: vy / mag, rawMag };
 };
 
-// Calcula amplitude efetiva levando em conta redução por anodo (Fix 3)
+// Amplitude efetiva: anodo reduz em 0.6 × percentual_anodo
 const calcAmpEfetiva = (contatos, amp) => {
-  const anodos = Object.entries(contatos).filter(([k,v]) => v.state === '+');
-  const totalAnodoPerc = anodos.reduce((sum, [,v]) => sum + (v.perc ?? 100), 0);
-  const reducao = 0.006 * totalAnodoPerc; // 0.6 * (perc/100)
-  return amp * (1 - reducao);
-};
-const getContactZ = (key) => {
-  const num = parseInt(key[0]);
-  return num; // 0, 1, 2 ou 3
+  const totalAnodoPerc = Object.entries(contatos)
+    .filter(([, v]) => v.state === '+')
+    .reduce((s, [, v]) => s + (v.perc ?? 100), 0);
+  return amp * (1 - 0.006 * totalAnodoPerc);
 };
 
+const getContactZ = (key) => parseInt(key[0]);
 
 const dirVector3D = (contatos, amp) => {
   const { ux, uy } = dirUnitVector2D(contatos);
-
-  // Fix 2: redistribuir perc Z também
-  const catodos = Object.entries(contatos).filter(([,v]) => v.state === '-');
-  const anodos  = Object.entries(contatos).filter(([,v]) => v.state === '+');
-  const percEf = (v, grupo) => {
-    const todosDefault = grupo.every(([,c]) => c.perc === 100 || c.perc === undefined);
-    return (todosDefault && grupo.length > 1 ? 100 / grupo.length : (v.perc ?? 100)) / 100;
-  };
-
-  let zNet = 0, wTot = 0;
-  catodos.forEach(([k,v]) => {
-    const p = percEf(v, catodos);
-    zNet -= p * parseInt(k[0]); // Fix 1: catodo reduz Z
-    wTot += p;
+  // Z: centro ponderado de TODOS os contatos (mesma lógica de direção)
+  let zSum = 0, wSum = 0;
+  Object.entries(contatos).forEach(([k, v]) => {
+    if (v.state === 'off') return;
+    const perc = (v.perc ?? 100) / 100;
+    zSum += perc * getContactZ(k);
+    wSum += perc;
   });
-  anodos.forEach(([k,v]) => {
-    const p = percEf(v, anodos);
-    zNet += p * parseInt(k[0]);
-    wTot += p;
-  });
-
-  const uz = wTot > 0 ? zNet / wTot : 0;
+  const uz = wSum > 0 ? (zSum / wSum - 1.5) / 1.5 : 0; // normalizar 0-3 → -1..+1
   const mag3 = Math.sqrt(ux*ux + uy*uy + uz*uz) || 1;
-  // Fix 3: amplitude efetiva
   const ampEf = calcAmpEfetiva(contatos, amp);
-
   return { ux: ux/mag3, uy: uy/mag3, uz: uz/mag3, amp: ampEf };
 };
 
-const PolarDisplay2D = ({ marcadores, maxAmp, pw, sessaoAtualTimestamp, programaContatos, ampAtual }) => {
+
+const PolarDisplay2D = ({ marcadores, maxAmp, grupoKey, sessaoAtualTimestamp, programaContatos, ampAtual, labelGrupo }) => {
   const [isZoomed, setIsZoomed] = React.useState(false);
   const S = isZoomed ? 300 : 160;
   const C = S / 2, margin = S * 0.14, R = C - margin;
-  const toR = (amp) => (Math.min(Math.max(amp, 0), maxAmp) / Math.max(maxAmp, 0.1)) * R;
+  const toR = (amp) => (Math.min(Math.max(amp,0), maxAmp) / Math.max(maxAmp, 0.1)) * R;
   const rings = [];
   for (let v = 1; v <= Math.ceil(maxAmp); v++) rings.push(v);
 
-  // Linha de estimulação atual (Fix: adicionar linha transparente)
   const currentVec = programaContatos ? dirUnitVector2D(programaContatos) : null;
-  const currentAmpEf = programaContatos && ampAtual
-    ? calcAmpEfetiva(programaContatos, ampAtual)
-    : 0;
-  const currentR = currentAmpEf > 0 ? toR(currentAmpEf) : 0;
+  const currentAmpEf = programaContatos && ampAtual ? calcAmpEfetiva(programaContatos, ampAtual) : 0;
 
   return (
     <div className="flex flex-col items-center gap-0.5">
-      <span className="text-[8px] text-slate-500 font-mono">PW {pw}µs</span>
-      <div
-        className={`relative cursor-pointer transition-all duration-200 ${isZoomed ? 'z-50' : ''}`}
-        onClick={() => setIsZoomed(!isZoomed)}
-        title="Clique para ampliar/reduzir"
-      >
-        <svg width={S} height={S} viewBox={`0 0 ${S} ${S}`}>
-          <rect width={S} height={S} fill="#ffffff" rx="8" />
-
-          {/* Anéis a cada 1mA */}
+      {labelGrupo && <span className="text-[8px] text-slate-500 font-mono">{labelGrupo}</span>}
+      <div className="relative cursor-pointer" onClick={() => setIsZoomed(!isZoomed)} title="Clique para ampliar">
+        <svg width={S} height={S} viewBox={String.raw\`0 0 \${S} \${S}\`}>
+          <rect width={S} height={S} fill="#ffffff" rx="8"/>
           {rings.map(v => (
             <g key={v}>
               <circle cx={C} cy={C} r={toR(v)} fill="none"
                 stroke={v === Math.ceil(maxAmp) ? '#475569' : '#cbd5e1'}
                 strokeWidth={v === Math.ceil(maxAmp) ? 1.5 : 0.5}
-                strokeDasharray={v < maxAmp ? '2,2' : undefined} />
-              <text x={C + toR(v) + 2} y={C - 2}
-                fontSize={Math.max(5, S * 0.035)} fill="#94a3b8">{v}mA</text>
+                strokeDasharray={v < maxAmp ? '2,2' : undefined}/>
+              <text x={C + toR(v) + 2} y={C - 2} fontSize={Math.max(5, S*0.033)} fill="#94a3b8">{v}mA</text>
             </g>
           ))}
-
-          {/* Eixos A/B/C */}
           {Object.entries(DIR_ANGLES).map(([letter, deg]) => {
             const rad = deg * Math.PI / 180;
             const labelR = toR(Math.ceil(maxAmp)) + S * 0.07;
             return (
               <g key={letter}>
-                <line x1={C} y1={C}
-                  x2={C + Math.cos(rad) * toR(Math.ceil(maxAmp))}
-                  y2={C - Math.sin(rad) * toR(Math.ceil(maxAmp))}
-                  stroke="#94a3b8" strokeWidth={0.5} />
-                <text x={C + Math.cos(rad) * labelR}
-                  y={C - Math.sin(rad) * labelR}
-                  textAnchor="middle" dominantBaseline="middle"
-                  fontSize={Math.max(9, S * 0.06)} fontWeight="bold" fill="#1e293b">
-                  {letter}
-                </text>
+                <line x1={C} y1={C} x2={C + Math.cos(rad)*toR(Math.ceil(maxAmp))} y2={C - Math.sin(rad)*toR(Math.ceil(maxAmp))} stroke="#94a3b8" strokeWidth={0.5}/>
+                <text x={C + Math.cos(rad)*labelR} y={C - Math.sin(rad)*labelR} textAnchor="middle" dominantBaseline="middle" fontSize={Math.max(9, S*0.06)} fontWeight="bold" fill="#1e293b">{letter}</text>
               </g>
             );
           })}
-
-          {/* Linha de estimulação atual — Fix: linha transparente até o ponto atual */}
-          {currentVec && currentR > 0 && (
-            <line
-              x1={C} y1={C}
-              x2={C + currentVec.ux * currentR}
-              y2={C - currentVec.uy * currentR}
-              stroke="#6366f1" strokeWidth={2} strokeDasharray="4,3" opacity={0.5}
-            />
+          {currentVec && currentAmpEf > 0 && (
+            <line x1={C} y1={C} x2={C + currentVec.ux*toR(currentAmpEf)} y2={C - currentVec.uy*toR(currentAmpEf)}
+              stroke="#6366f1" strokeWidth={2} strokeDasharray="4,3" opacity={0.5}/>
           )}
-
-          <circle cx={C} cy={C} r={Math.max(2, S * 0.015)} fill="#334155" />
-
-          {/* Marcadores — Fix 4: 30% menores, com title para tooltip */}
+          <circle cx={C} cy={C} r={Math.max(2, S*0.015)} fill="#334155"/>
           {marcadores.map((m, mi) => {
             const contatos = m._contatos || parseConfigToContatos(m.config);
             const { ux, uy } = dirUnitVector2D(contatos);
             const ampEf = calcAmpEfetiva(contatos, m.amp || 0);
             const r = toR(ampEf);
-            const px = C + ux * r;
-            const py = C - uy * r;
-            const isPos = ['tremor', 'rigidez', 'bradicinesia'].includes(m.tipo);
+            const px = C + ux * r, py = C - uy * r;
+            const isPos = ['tremor','rigidez','bradicinesia'].includes(m.tipo);
             const info = MARCADOR_LETRAS[m.tipo] || { letra: '?' };
             const fill = isPos ? '#059669' : '#e11d48';
-            const markerR = Math.max(3.5, S * 0.031); // 30% menor (0.045 → 0.031)
-            const opacity = Math.max(0.4, opacidadeMarcador(
-              m.sessionTimestamp || m.timestamp || 0,
-              sessaoAtualTimestamp || Date.now()
-            ));
+            const markerR = Math.max(3.5, S * 0.031);
+            const opacity = Math.max(0.4, opacidadeMarcador(m.sessionTimestamp || m.timestamp || 0, sessaoAtualTimestamp || Date.now()));
             return (
               <g key={mi} opacity={opacity}>
-                <title>{`${m.tipo} | ${m.amp}mA | ${m.freq}Hz | PW:${m.pw}`}</title>
-                <circle cx={px} cy={py} r={markerR} fill={fill} fillOpacity={0.3}
-                  stroke={fill} strokeWidth={1.5} />
-                <text x={px} y={py} textAnchor="middle" dominantBaseline="middle"
-                  fontSize={Math.max(6, S * 0.045)} fill="#fff" fontWeight="bold"
-                  stroke={fill} strokeWidth={0.3}>
-                  {info.letra}
-                </text>
+                <title>{String.raw\`\${m.tipo} | \${m.amp}mA | \${m.freq}Hz | PW:\${m.pw}\`}</title>
+                <circle cx={px} cy={py} r={markerR} fill={fill} fillOpacity={0.3} stroke={fill} strokeWidth={1.5}/>
+                <text x={px} y={py} textAnchor="middle" dominantBaseline="middle" fontSize={Math.max(6, S*0.045)} fill="#fff" fontWeight="bold" stroke={fill} strokeWidth={0.3}>{info.letra}</text>
               </g>
             );
           })}
@@ -730,28 +653,25 @@ const PolarDisplay2D = ({ marcadores, maxAmp, pw, sessaoAtualTimestamp, programa
   );
 };
 
-const DirectionalHistorico = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContatos, ampAtual }) => {
-  const byPW = {};
+const DirectionalHistorico = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq }) => {
+  const byGroup = {};
   marcadores.forEach(m => {
-    const pw = m.pw || 60;
-    if (!byPW[pw]) byPW[pw] = [];
-    byPW[pw].push({ ...m, _contatos: parseConfigToContatos(m.config) });
+    const key = String(agruparPorFreq ? (m.freq || 130) : (m.pw || 60));
+    if (!byGroup[key]) byGroup[key] = [];
+    byGroup[key].push({ ...m, _contatos: parseConfigToContatos(m.config) });
   });
-  const pws = Object.keys(byPW).sort((a, b) => +a - +b);
+  const keys = Object.keys(byGroup).sort((a, b) => +a - +b);
+  const labelPrefix = agruparPorFreq ? 'Hz' : 'µs';
 
-  if (pws.length === 0) return (
-    <div className="text-[9px] text-slate-600 italic px-1 mb-1">
-      Sem marcadores neste nível direcional
-    </div>
-  );
+  if (keys.length === 0) return <div className="text-[9px] text-slate-600 italic px-1 mb-1">Sem marcadores neste nível direcional</div>;
 
   return (
     <div className="flex gap-2 flex-wrap mb-2 px-1">
-      {pws.map(pw => (
-        <PolarDisplay2D key={pw}
-          marcadores={byPW[pw]}
+      {keys.map(k => (
+        <PolarDisplay2D key={k}
+          marcadores={byGroup[k]}
           maxAmp={maxAmp}
-          pw={pw}
+          labelGrupo={String.raw\`\${k}\${labelPrefix}\`}
           sessaoAtualTimestamp={sessaoAtualTimestamp}
           programaContatos={programaContatos}
           ampAtual={ampAtual}
@@ -761,145 +681,189 @@ const DirectionalHistorico = ({ marcadores, maxAmp, sessaoAtualTimestamp, progra
   );
 };
 
-const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContatos, ampAtual }) => {
+const TripleView3D = ({ marcadores, maxAmp, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq, historicoRef, marcadoresRing }) => {
   const [isZoomed, setIsZoomed] = React.useState(false);
+  const [mostrarRing, setMostrarRing] = React.useState(true);
+  const [mostrarSingleDir, setMostrarSingleDir] = React.useState(true);
   const S = isZoomed ? 240 : 140;
   const C = S / 2, margin = S * 0.12, R = C - margin;
-  const toR = (amp) => (Math.min(Math.max(amp, 0), maxAmp) / Math.max(maxAmp, 0.1)) * R;
+  const toR = (amp) => (Math.min(Math.max(amp,0), maxAmp) / Math.max(maxAmp,0.1)) * R;
   const rings = [];
   for (let v = 1; v <= Math.ceil(maxAmp); v++) rings.push(v);
 
   const zToSvg = (zVal) => C - (zVal - 1.5) * (R * 0.45);
 
+  // Separar marcadores por tipo
+  const marcadoresMultiDir = marcadores; // já filtrados
+  const marcadoresSingleDirExtras = mostrarSingleDir ? (marcadoresRing || []).filter(m => {
+    const c = parseConfigToContatos(m.config);
+    return classifyStim(c, 'directional') === 'single-dir';
+  }) : [];
+  const marcadoresRingExtras = mostrarRing ? (marcadoresRing || []).filter(m => {
+    const c = parseConfigToContatos(m.config);
+    return classifyStim(c, 'directional') === 'ring' || !getDirLevel(m.config);
+  }) : [];
+
+  // Agrupar por PW ou Freq
+  const byGroup = {};
+  [...marcadoresMultiDir, ...marcadoresSingleDirExtras].forEach(m => {
+    const key = String(agruparPorFreq ? (m.freq||130) : (m.pw||60));
+    if (!byGroup[key]) byGroup[key] = { multiDir: [], singleDir: [] };
+    if (marcadoresMultiDir.includes(m)) byGroup[key].multiDir.push(m);
+    else byGroup[key].singleDir.push(m);
+  });
+  // Adicionar ring markers (aparecem em todos os grupos)
+  const allKeys = [...new Set([
+    ...Object.keys(byGroup),
+    ...marcadoresRingExtras.map(m => String(agruparPorFreq ? (m.freq||130) : (m.pw||60)))
+  ])].sort((a,b) => +a - +b);
+  allKeys.forEach(k => { if (!byGroup[k]) byGroup[k] = { multiDir: [], singleDir: [] }; });
+
+  const curVec = programaContatos ? dirVector3D(programaContatos, ampAtual || 0) : null;
+  const labelPrefix = agruparPorFreq ? 'Hz' : 'µs';
+
   const ElectrodeSchematic = ({ highlightLevels }) => (
     <g>
-      <line x1={C - R * 0.82} y1={zToSvg(3) - 4} x2={C - R * 0.82} y2={zToSvg(0) + 4}
-        stroke="#334155" strokeWidth={3} />
-      {[3, 2, 1, 0].map(lv => {
-        const y = zToSvg(lv);
-        const hl = highlightLevels?.includes(String(lv));
+      <line x1={margin*0.6} y1={zToSvg(3)-4} x2={margin*0.6} y2={zToSvg(0)+4} stroke="#334155" strokeWidth={3}/>
+      {[3,2,1,0].map(lv => {
+        const y = zToSvg(lv), hl = highlightLevels?.includes(String(lv));
         return (
           <g key={lv}>
-            <rect x={C - R * 0.82 - 5} y={y - 4} width={10} height={8} rx={2}
-              fill={hl ? "#2563eb" : (lv === 1 || lv === 2 ? "#475569" : "#94a3b8")}
-              stroke={hl ? "#93c5fd" : "#cbd5e1"} strokeWidth={0.5} />
-            <text x={C - R * 0.82 - 8} y={y + 1} textAnchor="end"
-              fontSize={Math.max(5, S * 0.04)}
-              fill={hl ? "#2563eb" : "#94a3b8"}>{lv}</text>
+            <rect x={margin*0.6-5} y={y-4} width={10} height={8} rx={2}
+              fill={hl ? '#2563eb' : (lv===1||lv===2 ? '#475569' : '#94a3b8')}
+              stroke={hl ? '#93c5fd' : '#cbd5e1'} strokeWidth={0.5}/>
+            <text x={margin*0.6-8} y={y+1} textAnchor="end" fontSize={Math.max(5,S*0.04)} fill={hl ? '#2563eb' : '#94a3b8'}>{lv}</text>
           </g>
         );
       })}
     </g>
   );
 
-  const preparedMarkers = marcadores.map(m => {
-    const c = parseConfigToContatos(m.config);
-    return { ...m, _vec: dirVector3D(c, m.amp || 0),
-      _levels: [...new Set(Object.keys(c).map(k => k[0]))] };
-  });
-  const allLevels = [...new Set(preparedMarkers.flatMap(m => m._levels))];
-  const curVec = programaContatos ? dirVector3D(programaContatos, ampAtual || 0) : null;
-
   const projections = [
-    {
-      label: "XY · topo",
-      showSchematic: false,
-      getXY: (v) => ({ px: v.ux, py: v.uy }),
-      dirLabels: Object.entries(DIR_ANGLES).map(([letter, deg]) => {
-        const rad = deg * Math.PI / 180;
-        return { letter, lx: Math.cos(rad), ly: -Math.sin(rad) };
-      }),
-    },
-    {
-      label: "XZ · frente",
-      showSchematic: true,
-      getXY: (v) => ({ px: v.ux, py: v.uz }),
-      dirLabels: [{ letter: "A", lx: 1, ly: 0 }, { letter: "B/C", lx: -0.5, ly: 0 }],
-    },
-    {
-      label: "YZ · lado",
-      showSchematic: true,
-      getXY: (v) => ({ px: v.uy, py: v.uz }),
-      dirLabels: [{ letter: "B", lx: -1, ly: 0 }, { letter: "C", lx: 0.87, ly: 0 }],
-    },
+    { label: 'XY · topo', showSchematic: false, getXY: v => ({ px: v.ux, py: v.uy }),
+      dirLabels: Object.entries(DIR_ANGLES).map(([lt, deg]) => ({ letter: lt, lx: Math.cos(deg*Math.PI/180), ly: -Math.sin(deg*Math.PI/180) })) },
+    { label: 'XZ · frente', showSchematic: true, getXY: v => ({ px: v.ux, py: v.uz }),
+      dirLabels: [{ letter:'A', lx:1, ly:0 }, { letter:'B/C', lx:-0.5, ly:0 }] },
+    { label: 'YZ · lado', showSchematic: true, getXY: v => ({ px: v.uy, py: v.uz }),
+      dirLabels: [{ letter:'B', lx:-1, ly:0 }, { letter:'C', lx:0.87, ly:0 }] },
   ];
+
+  const renderOneSVG = (grpKey, { multiDir, singleDir }, showSchematic, getXY, dirLabels) => {
+    const allLevels = [...new Set([...multiDir,...singleDir].flatMap(m => Object.keys(parseConfigToContatos(m.config)).map(k=>k[0])))];
+    const ringMks = marcadoresRingExtras.filter(m => String(agruparPorFreq ? (m.freq||130) : (m.pw||60)) === grpKey);
+    return (
+      <svg key={String.raw\`\${grpKey}-\${showSchematic}\`} width={S} height={S} viewBox={String.raw\`0 0 \${S} \${S}\`}>
+        <rect width={S} height={S} fill="#ffffff" rx="6"/>
+        {rings.map(v => (
+          <circle key={v} cx={C} cy={C} r={toR(v)} fill="none"
+            stroke={v===Math.ceil(maxAmp)?'#475569':'#e2e8f0'}
+            strokeWidth={v===Math.ceil(maxAmp)?1.5:0.5}
+            strokeDasharray={v<maxAmp?'2,2':undefined}/>
+        ))}
+        <line x1={margin} y1={C} x2={S-margin} y2={C} stroke="#e2e8f0" strokeWidth={0.5}/>
+        <line x1={C} y1={margin} x2={C} y2={S-margin} stroke="#e2e8f0" strokeWidth={0.5}/>
+        {dirLabels.map(({ letter, lx, ly }) => {
+          const labelR = toR(Math.ceil(maxAmp)) + S*0.07;
+          return <text key={letter} x={C+lx*labelR} y={C-ly*labelR} textAnchor="middle" dominantBaseline="middle" fontSize={Math.max(7,S*0.055)} fontWeight="bold" fill="#1e293b">{letter}</text>;
+        })}
+        {showSchematic && <ElectrodeSchematic highlightLevels={allLevels}/>}
+        {curVec && (() => { const {px:cux,py:cuy}=getXY(curVec); const cr=toR(curVec.amp||0); return cr>0?<line x1={C} y1={C} x2={C+cux*cr} y2={C-cuy*cr} stroke="#6366f1" strokeWidth={2} strokeDasharray="4,3" opacity={0.5}/>:null; })()}
+        <circle cx={C} cy={C} r={Math.max(2,S*0.015)} fill="#334155"/>
+        {/* Ring markers: anel fino */}
+        {ringMks.map((m,mi) => {
+          const isPos = ['tremor','rigidez','bradicinesia'].includes(m.tipo);
+          const info = MARCADOR_LETRAS[m.tipo]||{letra:'?'};
+          const fill = isPos?'#059669':'#e11d48';
+          const opacity = Math.max(0.4, opacidadeMarcador(m.sessionTimestamp||m.timestamp||0, sessaoAtualTimestamp||Date.now()));
+          const rRing = toR(m.amp||0);
+          return (
+            <g key={String.raw\`ring-\${mi}\`} opacity={opacity}>
+              <title>{String.raw\`[ring] \${m.tipo} | \${m.amp}mA\`}</title>
+              <circle cx={C} cy={C} r={rRing} fill="none" stroke={fill} strokeWidth={1.5} strokeDasharray="2,2" opacity={0.5}/>
+              <text x={C+rRing*0.707+2} y={C-rRing*0.707-2} textAnchor="middle" fontSize={Math.max(5,S*0.04)} fill={fill} fontWeight="bold">{info.letra}</text>
+            </g>
+          );
+        })}
+        {/* Single-dir extras */}
+        {singleDir.map((m,mi) => {
+          const c = parseConfigToContatos(m.config);
+          const vec = dirVector3D(c, m.amp||0);
+          const {px:ux,py:uy}=getXY(vec);
+          const r=toR(vec.amp||0);
+          const svgX=C+ux*r, svgY=C-uy*r;
+          const isPos=['tremor','rigidez','bradicinesia'].includes(m.tipo);
+          const info=MARCADOR_LETRAS[m.tipo]||{letra:'?'};
+          const fill=isPos?'#059669':'#e11d48';
+          const opacity=Math.max(0.4,opacidadeMarcador(m.sessionTimestamp||m.timestamp||0,sessaoAtualTimestamp||Date.now()));
+          return (
+            <g key={String.raw\`sd-\${mi}\`} opacity={opacity*0.7}>
+              <title>{String.raw\`[single] \${m.tipo} | \${m.amp}mA\`}</title>
+              <circle cx={svgX} cy={svgY} r={Math.max(3,S*0.025)} fill={fill} fillOpacity={0.2} stroke={fill} strokeWidth={1} strokeDasharray="1,1"/>
+              <text x={svgX} y={svgY} textAnchor="middle" dominantBaseline="middle" fontSize={Math.max(5,S*0.038)} fill="#fff" fontWeight="bold" stroke={fill} strokeWidth={0.3}>{info.letra}</text>
+            </g>
+          );
+        })}
+        {/* Multi-dir markers */}
+        {multiDir.map((m,mi) => {
+          const c=parseConfigToContatos(m.config);
+          const vec=dirVector3D(c,m.amp||0);
+          const {px:ux,py:uy}=getXY(vec);
+          const r=toR(vec.amp||0);
+          const svgX=C+ux*r,svgY=C-uy*r;
+          const isPos=['tremor','rigidez','bradicinesia'].includes(m.tipo);
+          const info=MARCADOR_LETRAS[m.tipo]||{letra:'?'};
+          const fill=isPos?'#059669':'#e11d48';
+          const markerR=Math.max(3.5,S*0.031);
+          const opacity=Math.max(0.4,opacidadeMarcador(m.sessionTimestamp||m.timestamp||0,sessaoAtualTimestamp||Date.now()));
+          return (
+            <g key={String.raw\`md-\${mi}\`} opacity={opacity}>
+              <title>{String.raw\`\${m.tipo} | \${m.amp}mA | \${m.freq}Hz\`}</title>
+              <circle cx={svgX} cy={svgY} r={markerR} fill={fill} fillOpacity={0.3} stroke={fill} strokeWidth={1.5}/>
+              <text x={svgX} y={svgY} textAnchor="middle" dominantBaseline="middle" fontSize={Math.max(6,S*0.045)} fill="#fff" fontWeight="bold" stroke={fill} strokeWidth={0.3}>{info.letra}</text>
+            </g>
+          );
+        })}
+      </svg>
+    );
+  };
 
   return (
     <div className="flex flex-col gap-1 mb-2">
-      <div className="flex items-center justify-between px-1">
+      <div className="flex items-center justify-between px-1 flex-wrap gap-1">
         <p className="text-[8px] text-slate-500 uppercase tracking-widest">Direcional multi-nível</p>
-        <button onClick={() => setIsZoomed(!isZoomed)}
-          className="text-[8px] text-slate-500 hover:text-slate-700 font-bold px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200">
-          {isZoomed ? "−" : "+"}
-        </button>
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1 cursor-pointer">
+            <input type="checkbox" checked={mostrarRing} onChange={e=>setMostrarRing(e.target.checked)} className="accent-indigo-500 w-3 h-3"/>
+            <span className="text-[8px] text-slate-500">Ring</span>
+          </label>
+          <label className="flex items-center gap-1 cursor-pointer">
+            <input type="checkbox" checked={mostrarSingleDir} onChange={e=>setMostrarSingleDir(e.target.checked)} className="accent-indigo-500 w-3 h-3"/>
+            <span className="text-[8px] text-slate-500">Single-dir</span>
+          </label>
+          <button onClick={() => setIsZoomed(!isZoomed)} className="text-[8px] text-slate-500 hover:text-slate-700 font-bold px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200">
+            {isZoomed ? '−' : '+'}
+          </button>
+        </div>
       </div>
-      <div className="flex gap-2 flex-wrap">
-        {projections.map(({ label, showSchematic, getXY, dirLabels }) => (
-          <div key={label} className="flex flex-col items-center gap-0.5">
-            <span className="text-[7px] text-slate-500">{label}</span>
-            <svg width={S} height={S} viewBox={`0 0 ${S} ${S}`}>
-              <rect width={S} height={S} fill="#ffffff" rx="6" />
-              {rings.map(v => (
-                <circle key={v} cx={C} cy={C} r={toR(v)} fill="none"
-                  stroke={v === Math.ceil(maxAmp) ? "#475569" : "#e2e8f0"}
-                  strokeWidth={v === Math.ceil(maxAmp) ? 1.5 : 0.5}
-                  strokeDasharray={v < maxAmp ? "2,2" : undefined} />
-              ))}
-              <line x1={margin} y1={C} x2={S-margin} y2={C} stroke="#e2e8f0" strokeWidth={0.5}/>
-              <line x1={C} y1={margin} x2={C} y2={S-margin} stroke="#e2e8f0" strokeWidth={0.5}/>
-              {dirLabels.map(({ letter, lx, ly }) => {
-                const labelR = toR(Math.ceil(maxAmp)) + S * 0.07;
-                return (
-                  <text key={letter} x={C + lx * labelR} y={C - ly * labelR}
-                    textAnchor="middle" dominantBaseline="middle"
-                    fontSize={Math.max(7, S * 0.055)} fontWeight="bold" fill="#1e293b">
-                    {letter}
-                  </text>
-                );
-              })}
-              {showSchematic && <ElectrodeSchematic highlightLevels={allLevels} />}
-              {curVec && (() => {
-                const { px: cux, py: cuy } = getXY(curVec);
-                const cr = toR(curVec.amp || 0);
-                return cr > 0 ? (
-                  <line x1={C} y1={C} x2={C + cux * cr} y2={C - cuy * cr}
-                    stroke="#6366f1" strokeWidth={2} strokeDasharray="4,3" opacity={0.5} />
-                ) : null;
-              })()}
-              <circle cx={C} cy={C} r={Math.max(2, S * 0.015)} fill="#334155" />
-              {preparedMarkers.map((m, mi) => {
-                const { px: ux, py: uy } = getXY(m._vec);
-                const r = toR(m._vec.amp || 0);
-                const svgX = C + ux * r;
-                const svgY = C - uy * r;
-                const isPos = ["tremor","rigidez","bradicinesia"].includes(m.tipo);
-                const info = MARCADOR_LETRAS[m.tipo] || { letra: "?" };
-                const fill = isPos ? "#059669" : "#e11d48";
-                const markerR = Math.max(3.5, S * 0.031);
-                const opacity = Math.max(0.4, opacidadeMarcador(
-                  m.sessionTimestamp || m.timestamp || 0, sessaoAtualTimestamp || Date.now()
-                ));
-                return (
-                  <g key={mi} opacity={opacity}>
-                    <title>{`${m.tipo} | ${m.amp}mA | ${m.freq}Hz`}</title>
-                    <circle cx={svgX} cy={svgY} r={markerR} fill={fill} fillOpacity={0.3}
-                      stroke={fill} strokeWidth={1.5} />
-                    <text x={svgX} y={svgY} textAnchor="middle" dominantBaseline="middle"
-                      fontSize={Math.max(6, S * 0.045)} fill="#fff" fontWeight="bold"
-                      stroke={fill} strokeWidth={0.3}>{info.letra}</text>
-                  </g>
-                );
-              })}
-            </svg>
+      {allKeys.map(grpKey => (
+        <div key={grpKey} className="flex flex-col gap-0.5">
+          <span className="text-[8px] text-slate-400 font-mono px-1">{grpKey}{labelPrefix}</span>
+          <div className="flex gap-2 flex-wrap">
+            {projections.map(({ label, showSchematic, getXY, dirLabels }) => (
+              <div key={label} className="flex flex-col items-center gap-0.5">
+                <span className="text-[7px] text-slate-500">{label}</span>
+                {renderOneSVG(grpKey, byGroup[grpKey], showSchematic, getXY, dirLabels)}
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        </div>
+      ))}
     </div>
   );
 };
 
-const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimestamp }) => {
-  const [timelineW, setTimelineW] = React.useState(null); // null = 100% natural
+const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimestamp, agruparPorFreq }) => {
+  const [timelineW, setTimelineW] = React.useState(null);
   const dragRef = React.useRef(null);
 
   const iniciarResize = (e) => {
@@ -920,24 +884,23 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
     window.addEventListener('mouseup', onUp);
   };
 
-  const historicoPorPW = useMemo(() => {
+  const historicoPorGrupo = useMemo(() => {
     const grupos = {};
     if (!historicoRef) return grupos;
     historicoRef.forEach(h => {
-      if (!grupos[h.pw]) grupos[h.pw] = [];
-      grupos[h.pw].push(h);
+      const key = String(agruparPorFreq ? h.freq : h.pw);
+      if (!grupos[key]) grupos[key] = [];
+      grupos[key].push(h);
     });
     return Object.keys(grupos).sort((a,b) => Number(a) - Number(b)).reduce((obj, key) => {
       obj[key] = grupos[key]; return obj;
     }, {});
-  }, [historicoRef]);
+  }, [historicoRef, agruparPorFreq]);
 
   const effectiveMax = maxAmp > 0 ? maxAmp : 4;
 
-  // Unir PWs do histórico com PWs dos marcadores clínicos (mudança 2)
-  // Garante que uma linha seja criada mesmo sem histórico prévio naquele PW
-  const pwsDosMarcadores = (marcadores || []).map(m => String(m.pw)).filter(Boolean);
-  const todosOsPWs = [...new Set([...Object.keys(historicoPorPW), ...pwsDosMarcadores])]
+  const gruposDosMarcadores = (marcadores || []).map(m => String(agruparPorFreq ? m.freq : m.pw)).filter(Boolean);
+  const todosOsPWs = [...new Set([...Object.keys(historicoPorGrupo), ...gruposDosMarcadores])]
     .sort((a, b) => Number(a) - Number(b));
 
   // Gerar marcações de eixo X a cada 0.5 mA
@@ -974,7 +937,7 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
       </div>
 
       {todosOsPWs.map((pwStr, pwIdx) => {
-        const items = historicoPorPW[pwStr] || [];
+        const items = historicoPorGrupo[pwStr] || [];
         const itemsByAmp = {};
         items.forEach(item => {
           if (!itemsByAmp[item.amp]) itemsByAmp[item.amp] = [];
@@ -982,7 +945,7 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
         });
         // Filtrar marcadores: para cada par <0.2mA, manter apenas o mais recente;
         // em caso de mesmo timestamp, priorizar efeito colateral sobre positivo
-        const marcadoresRaw = (marcadores || []).filter(m => String(m.pw) === pwStr);
+        const marcadoresRaw = (marcadores || []).filter(m => String(agruparPorFreq ? m.freq : m.pw) === pwStr);
         const marcadoresDessePW = marcadoresRaw.filter((m, i) => {
           return !marcadoresRaw.some((outro, j) => {
             if (i === j) return false;
@@ -1006,7 +969,7 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
               <div className="w-full h-px bg-slate-400 opacity-40 mx-0" />
             )}
             <div className="relative w-full h-16 flex items-center">
-              <span className="absolute left-0 text-[9px] font-bold text-slate-400 bg-white px-1 rounded shadow-sm z-10 border border-slate-200 w-7 text-center">{pwStr}µs</span>
+              <span className="absolute left-0 text-[9px] font-bold text-slate-400 bg-white px-1 rounded shadow-sm z-10 border border-slate-200 w-7 text-center">{pwStr}{agruparPorFreq ? 'Hz' : 'µs'}</span>
               <div className="relative flex-1 h-full ml-8 mr-1">
 
                 {/* Indicadores clínicos históricos — z-10, renderizados ANTES dos marcadores no DOM
@@ -1037,7 +1000,7 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
                           style={{ left: `${leftPercent}%`, transform: 'translateX(-50%)', opacity: opacidade }}
                           title={`${h.amp}mA | ${h.freq}Hz | ${h.efeito} | Sessão: ${formatarData(h.date)}`}
                         >
-                          <span className="text-[8px] text-slate-700 font-bold mt-0.5" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', lineHeight: 1 }}>{h.freq}Hz</span>
+                          <span className="text-[8px] text-slate-700 font-bold mt-0.5" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', lineHeight: 1 }}>{agruparPorFreq ? `${h.pw}µs` : `${h.freq}Hz`}</span>
                         </div>
                       );
                     }
@@ -1067,7 +1030,7 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
                         borderColor: `rgba(${corBorda}, ${opacidade})`,
                         transform: 'translateX(-50%)'
                       }}
-                      title={`${m.tipo} | ${m.amp}mA | ${m.freq}Hz | ${Math.round(opacidade * 100)}%`}
+                      title={`${m.tipo} | ${m.amp}mA | ${agruparPorFreq ? `PW:${m.pw}µs` : `${m.freq}Hz`} | ${Math.round(opacidade * 100)}%`}
                     >
                       <span className={`text-[8px] font-black leading-none ${info.cor}`}>{info.letra}</span>
                     </div>
@@ -1097,21 +1060,45 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
   );
 };
 
-const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, isAmplitude, historicoRef, marcadores, sessaoAtualTimestamp, tipoEletrodo, programaContatos }) => (
+const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, isAmplitude, historicoRef, marcadores, marcadoresRing, sessaoAtualTimestamp, tipoEletrodo, programaContatos }) => {
+  const [agruparPorFreq, setAgruparPorFreq] = React.useState(false);
+  const [forcarMultiDir, setForcarMultiDir] = React.useState(false);
+
+  return (
   <div className="flex flex-col mb-3">
     {isAmplitude && (() => {
-      const stimType = tipoEletrodo === 'directional' && programaContatos
-        ? classifyStim(programaContatos, tipoEletrodo)
-        : 'ring';
+      const stimType = forcarMultiDir ? 'multi-dir'
+        : (tipoEletrodo === 'directional' && programaContatos
+          ? classifyStim(programaContatos, tipoEletrodo)
+          : 'ring');
+
+      // Botões de controle do display
+      const toggleBar = (
+        <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+          <button onClick={() => setAgruparPorFreq(v => !v)}
+            className={`text-[8px] font-bold px-1.5 py-0.5 rounded border transition-all ${agruparPorFreq ? 'bg-indigo-100 border-indigo-300 text-indigo-700' : 'bg-slate-100 border-slate-200 text-slate-500'}`}
+            title="Alternar agrupamento: Largura de Pulso ↔ Frequência">
+            {agruparPorFreq ? 'Ag: Freq' : 'Ag: PW'}
+          </button>
+          {tipoEletrodo === 'directional' && (
+            <button onClick={() => setForcarMultiDir(v => !v)}
+              className={`text-[8px] font-bold px-1.5 py-0.5 rounded border transition-all ${forcarMultiDir ? 'bg-violet-100 border-violet-300 text-violet-700' : 'bg-slate-100 border-slate-200 text-slate-500'}`}
+              title="Forçar visão 3D multi-dir">
+              3D
+            </button>
+          )}
+        </div>
+      );
+
       if (stimType === 'single-dir') {
-        return <DirectionalHistorico marcadores={marcadores} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} />;
+        return <>{toggleBar}<DirectionalHistorico marcadores={marcadores} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq}/></>;
       } else if (stimType === 'multi-dir') {
-        return <TripleView3D marcadores={marcadores} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} />;
+        return <>{toggleBar}<TripleView3D marcadores={marcadores} marcadoresRing={marcadoresRing} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq}/></>;
       } else {
-        return <TimelineHistorico historicoRef={historicoRef} maxAmp={max} marcadores={marcadores} sessaoAtualTimestamp={sessaoAtualTimestamp} />;
+        return <>{toggleBar}<TimelineHistorico historicoRef={historicoRef} maxAmp={max} marcadores={marcadores} sessaoAtualTimestamp={sessaoAtualTimestamp} agruparPorFreq={agruparPorFreq}/></>;
       }
     })()}
-     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1 mt-1">{label}</label>
+    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1 mt-1">{label}</label>
     <div className="flex items-center gap-1.5">
       <button onClick={() => onChange(Math.max(min, Number((valor - step).toFixed(2))))} className="w-6 h-6 rounded bg-slate-200 hover:bg-slate-300 font-bold text-sm flex-shrink-0 flex items-center justify-center">-</button>
       <input type="range" min={min} max={max} step={step} value={valor} onChange={(e) => onChange(parseFloat(e.target.value))} className="flex-1 h-1.5 bg-slate-300 rounded-lg appearance-none cursor-pointer accent-indigo-600"/>
@@ -1126,9 +1113,10 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, is
       </div>
     </div>
   </div>
-);
+  );
+};
 
-const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, onUpdateProg, onUpdateState, onUpdatePerc, historicoRef, isMatchExato, marcadores, onAdicionarMarcador, onDesfazerMarcadores, cycling, onToggleCycling, impedancia, onImpedanciaChange, ignorarPerc }) => {
+const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, onUpdateProg, onUpdateState, onUpdatePerc, historicoRef, isMatchExato, marcadores, marcadoresRing, onAdicionarMarcador, onDesfazerMarcadores, cycling, onToggleCycling, impedancia, onImpedanciaChange, ignorarPerc }) => {
   const listaColaterais = ["Parestesia", "Cápsula", "Disartria", "Outros"];
   const listaPositivos = ["tremor", "rigidez", "bradicinesia"];
   const configStr = getStringConfig(programa.contatos, ignorarPerc);
@@ -1173,7 +1161,7 @@ const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, o
         <div className="w-full flex flex-col justify-center flex-1">
           <ControleParametro 
             label="Amplitude" valor={programa.amp} unidade="mA" step={0.1} min={0} max={8}
-            onChange={(v) => onUpdateProg(lado, index, 'amp', v)} isAmplitude={true} historicoRef={historicoRef} marcadores={marcadores} tipoEletrodo={tipoEletrodo} programaContatos={programa.contatos} sessaoAtualTimestamp={historicoRef.current?.[0]?.timestamp || Date.now()}
+            onChange={(v) => onUpdateProg(lado, index, 'amp', v)} isAmplitude={true} historicoRef={historicoRef} marcadores={marcadores} marcadoresRing={marcadoresRing} tipoEletrodo={tipoEletrodo} programaContatos={programa.contatos} sessaoAtualTimestamp={historicoRef.current?.[0]?.timestamp || Date.now()}
           />
           <div className="flex flex-col mt-2">
             <ControleParametro label="Pulso" valor={programa.pw} unidade="µs" step={10} min={30} max={210} onChange={(v) => onUpdateProg(lado, index, 'pw', v)}/>
@@ -2591,6 +2579,7 @@ ${progTexto}Avaliação: ${textoEfeito}
                         lado="L" programa={prog} index={idx} isInterleaving={programasL.length > 1} tipoEletrodo={tipoEletrodo}
                         isMatchExato={isMatch} historicoRef={hist}
                         marcadores={[...marcadoresSessaoL, ...marcadoresHistL]}
+                        marcadoresRing={marcadoresHistoricos.L.concat(marcadoresClinicosL)}
                         onAdicionarMarcador={(tipo) => adicionarMarcadorClinico('L', tipo, idx)}
                         onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('L', cfg)}
                         cycling={cyclingL} onToggleCycling={() => setCyclingL(v => !v)}
@@ -2617,14 +2606,35 @@ ${progTexto}Avaliação: ${textoEfeito}
                   const configStr = getStringConfig(prog.contatos, !considerarAmplitude);
                   const hist = configStr ? historicoReal.filter(h => h.lado === 'R' && h.config === configStr) : [];
                   const isMatch = historicoReal.some(h => h.lado === 'R' && h.config === configStr && h.amp === prog.amp && h.pw === prog.pw && h.freq === prog.freq);
-                  const marcadoresSessaoR = marcadoresClinicosR.filter(m => m.config === configStr);
-                  const marcadoresHistR = marcadoresHistoricos.R.filter(m => m.config === configStr && !marcadoresClinicosR.some(mc => mc.id === m.id));
+                  const stimTypeR = classifyStim(prog.contatos, tipoEletrodo);
+                  const currentLevelR = getDirLevel(configStr);
+                  const marcadoresSessaoR = (() => {
+                    if (stimTypeR === 'single-dir' && currentLevelR) {
+                      return marcadoresClinicosR.filter(m => getDirLevel(m.config) === currentLevelR);
+                    }
+                    if (stimTypeR === 'multi-dir') {
+                      return marcadoresClinicosR.filter(m => getDirLevel(m.config) !== null);
+                    }
+                    return marcadoresClinicosR.filter(m => m.config === configStr);
+                  })();
+                  const marcadoresHistR = (() => {
+                    const seen = new Set(marcadoresClinicosR.map(mc => mc.id));
+                    if (stimTypeR === 'single-dir' && currentLevelR) {
+                      return marcadoresHistoricos.R.filter(m => getDirLevel(m.config) === currentLevelR && !seen.has(m.id));
+                    }
+                    if (stimTypeR === 'multi-dir') {
+                      return marcadoresHistoricos.R.filter(m => getDirLevel(m.config) !== null && !seen.has(m.id));
+                    }
+                    return marcadoresHistoricos.R.filter(m => m.config === configStr && !seen.has(m.id));
+                  })();
+                  const marcadoresRingR = marcadoresClinicosR.concat(marcadoresHistoricos.R.filter(m => !marcadoresClinicosR.some(mc2=>mc2.id===m.id)));
                   return (
                     <div key={`R-${idx}`} className="w-[340px] shrink-0">
                       <RenderPrograma
                         lado="R" programa={prog} index={idx} isInterleaving={programasR.length > 1} tipoEletrodo={tipoEletrodo}
                         isMatchExato={isMatch} historicoRef={hist}
                         marcadores={[...marcadoresSessaoR, ...marcadoresHistR]}
+                        marcadoresRing={marcadoresRingR}
                         onAdicionarMarcador={(tipo) => adicionarMarcadorClinico('R', tipo, idx)}
                         onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('R', cfg)}
                         cycling={cyclingR} onToggleCycling={() => setCyclingR(v => !v)}
@@ -2806,7 +2816,7 @@ ${progTexto}Avaliação: ${textoEfeito}
                 return (
                   <div key={mi}
                     className={`absolute w-5 h-5 rounded-full border ${corFundo} flex items-center justify-center`}
-                    style={{ left: `calc(${leftPct}%`, top: '50%', transform: 'translateY(-50%)' }}
+                    style={{ left: `calc(${leftPct}% + ${offsetX}px)`, top: '50%', transform: 'translateY(-50%)' }}
                     title={`${lado ? lado : ''}${config.match(/^([^-+]+)/)?.[1] || ''} | ${m.tipo} | ${m.amp}mA | ${m.freq}Hz | PW:${m.pw}`}
                   >
                     <span className={`text-[9px] font-black ${info.cor}`}>{info.letra}</span>
