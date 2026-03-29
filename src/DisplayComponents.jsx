@@ -282,14 +282,16 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
   };
 
   // Cache classifyStim results to avoid recomputing for each filter
-  const ringClassCache = new Map();
-  const getStimType = (m) => {
-    if (!ringClassCache.has(m.config)) {
-      try { ringClassCache.set(m.config, classifyStim(parseConfigToContatos(m.config), 'directional')); }
-      catch(e) { ringClassCache.set(m.config, 'ring'); }
+  const ringClassCacheRef = React.useRef(new Map());
+  const getStimType = React.useCallback((m) => {
+    if (!m || !m.config) return 'ring';
+    const cache = ringClassCacheRef.current;
+    if (!cache.has(m.config)) {
+      try { cache.set(m.config, classifyStim(parseConfigToContatos(m.config), 'directional')); }
+      catch(e) { cache.set(m.config, 'ring'); }
     }
-    return ringClassCache.get(m.config);
-  };
+    return cache.get(m.config);
+  }, []);
   const marcadoresSingleDirExtras = mostrarSingleDir ? allRing.filter(m => getStimType(m) === 'single-dir') : [];
   const marcadoresRingExtras = mostrarRing ? allRing.filter(m => {
     const st = getStimType(m);
@@ -527,10 +529,12 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
         {singleDir.filter(m => filterMarcador(m, false)).map((m, mi) => {
           const c = parseConfigToContatos(m.config);
           const vec = dirVector3D(c, m.amp || 0);
+          if (!vec || !isFinite(vec.amp)) return null;
           const { px: ux, py: uy } = getXY(vec);
           const r = toR(vec.amp || 0);
           const mOY = itemOriginY(m.config, showSchematic);
           const svgX = originX + ux * r, svgY = mOY - uy * r;
+          if (!isFinite(svgX) || !isFinite(svgY)) return null;
           const isPos = ['tremor', 'rigidez', 'bradicinesia'].includes(m.tipo);
           const info = MARCADOR_LETRAS[m.tipo] || { letra: '?' };
           const fill = isPos ? '#059669' : '#e11d48';
@@ -548,10 +552,12 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
         {multiDir.filter(m => filterMarcador(m, true)).map((m, mi) => {
           const c = parseConfigToContatos(m.config);
           const vec = dirVector3D(c, m.amp || 0);
+          if (!vec || !isFinite(vec.amp)) return null;
           const { px: ux, py: uy } = getXY(vec);
           const r = toR(vec.amp || 0);
           const mOY = itemOriginY(m.config, showSchematic);
           const svgX = originX + ux * r, svgY = mOY - uy * r;
+          if (!isFinite(svgX) || !isFinite(svgY)) return null;
           const isPos = ['tremor', 'rigidez', 'bradicinesia'].includes(m.tipo);
           const info = MARCADOR_LETRAS[m.tipo] || { letra: '?' };
           const fill = isPos ? '#059669' : '#e11d48';
@@ -568,12 +574,14 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
         })}
         {/* Indicadores de programação prévia — ring shown as rings, dir as dots */}
         {mostrarPrevios && histItems.map((h, hi) => {
+          if (!h || !h.config) return null;
           const hContatos = parseConfigToContatos(h.config);
-          const hType = classifyStim(hContatos, 'directional');
+          const hType = getStimType(h);
           const isRing = hType === 'ring' || !getDirLevel(h.config);
           if (isRing && !mostrarRing) return null;
           if (!isRing && !mostrarSingleDir) return null;
-          const hVec = dirVector3D(hContatos, h.amp || 0);
+          const hVec = Object.keys(hContatos).length > 0 ? dirVector3D(hContatos, h.amp || 0) : null;
+          if (!hVec) return null;
           const cor = h.efeito === 'bom' ? '#10b981'
             : h.efeito === 'ruim' ? '#f43f5e'
             : h.efeito === 'pouco' ? '#94a3b8' : '#67e8f9';
@@ -871,7 +879,7 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
 
 const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, isAmplitude, historicoRef, marcadores, marcadoresRing, marcadoresTodosL, historicoTodos, sessaoAtualTimestamp, tipoEletrodo, programaContatos }) => {
   const [agruparPorFreq, setAgruparPorFreq] = React.useState(false);
-  const [forcarMultiDir, setForcarMultiDir] = React.useState(false);
+
   const [anteriorContact, setAnteriorContact] = React.useState('A');
   const [fullscreenDisplay, setFullscreenDisplay] = React.useState(null); // {tipo, grpKey}
   // modoVis: 'auto' | '3d' | 'timeline'
@@ -883,10 +891,9 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, is
   return (
   <div className="flex flex-col mb-3">
     {isAmplitude && (() => {
-      const stimType = forcarMultiDir ? 'multi-dir'
-        : (tipoEletrodo === 'directional' && programaContatos
-          ? classifyStim(programaContatos, tipoEletrodo)
-          : 'ring');
+      const stimType = (tipoEletrodo === 'directional' && programaContatos)
+        ? classifyStim(programaContatos, tipoEletrodo)
+        : 'ring';
 
       // Botões de controle do display
       const toggleBar = (
@@ -896,11 +903,7 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, is
             title="Alternar agrupamento: Largura de Pulso ↔ Frequência">
             {agruparPorFreq ? 'Ag: Freq' : 'Ag: PW'}
           </button>
-          <button onClick={() => setForcarMultiDir(v => !v)}
-            className={`text-[8px] font-bold px-1.5 py-0.5 rounded border transition-all ${forcarMultiDir ? 'bg-violet-100 border-violet-300 text-violet-700' : 'bg-slate-100 border-slate-200 text-slate-500'}`}
-            title="Forçar visão 3D multi-dir">
-            3D
-          </button>
+
           {/* Visualization mode selector */}
           <div className="flex items-center gap-0.5 border border-slate-200 rounded overflow-hidden">
             {[
