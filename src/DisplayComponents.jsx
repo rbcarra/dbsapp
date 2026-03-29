@@ -253,6 +253,9 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
   const [mostrarNegativos, setMostrarNegativos] = React.useState(true);
   const [mostrarPrevios, setMostrarPrevios] = React.useState(true);
   const [apenasSimilar, setApenasSimilar] = React.useState(false);
+  const [tvZoom, setTvZoom] = React.useState(1);
+  const [tvPan, setTvPan] = React.useState({ x: 0, y: 0 });
+  const tvPanRef = React.useRef(null);
   const anteriorAngle = CONTACT_ANTERIOR_ANGLES[anteriorContact] ?? 90;
   const S = forcedSize ?? (isZoomed ? 240 : 140);
   const C = S / 2, margin = S * 0.12, R = C - margin;
@@ -265,10 +268,13 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
     Object.entries(contatos).forEach(([k, v]) => {
       if (v.state === 'off') return;
       const perc = (v.perc ?? 100) / 100;
-      zSum += perc * parseInt(k[0]);
+      const z = parseInt(k[0]);
+      if (isNaN(z)) return; // skip non-numeric keys
+      zSum += perc * z;
       wSum += perc;
     });
-    return wSum > 0 ? zSum / wSum : 1.5;
+    const result = wSum > 0 ? zSum / wSum : 1.5;
+    return isFinite(result) ? result : 1.5;
   };
 
   // Fix 1: similar filter based on programaContatos level
@@ -461,9 +467,11 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
   // Helper: for each marker/item, compute its own Z-origin in SVG coords for XZ/YZ views
   // This allows each point to emanate from its actual charge-center height on the electrode
   const itemOriginY = (config, isZView) => {
-    if (!isZView) return C; // XY view: flat, always center
+    if (!isZView) return C;
     const contatos = parseConfigToContatos(config);
-    return zToSvg(calcZCenter(contatos));
+    const zc = calcZCenter(contatos);
+    const y = zToSvg(isFinite(zc) ? zc : 1.5);
+    return isFinite(y) ? y : C;
   };
 
   const renderOneSVG = (grpKey, { multiDir, singleDir }, histItems, showSchematic, getXY, dirLabels) => {
@@ -500,12 +508,13 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
         })}
         {showSchematic && <ElectrodeSchematic highlightLevels={allLevels}/>}
         {/* Current stim line from its own origin */}
-        {curVec && (() => {
+        {curVec && isFinite(curVec.ux) && (() => {
           const { px: cux, py: cuy } = getXY(curVec);
-          const cr = toR(curVec.amp || 0); const _tvEz = tvEz;
-          return cr > 0 ? <line x1={originX} y1={originY}
+          const cr = toR(curVec.amp || 0);
+          if (!isFinite(cux) || cr <= 0) return null;
+          return <line x1={originX} y1={originY}
             x2={originX + cux * cr} y2={originY - cuy * cr}
-            stroke="#6366f1" strokeWidth={2/tvEz} strokeDasharray="4,3" opacity={0.5}/> : null;
+            stroke="#6366f1" strokeWidth={2/tvEz} strokeDasharray="4,3" opacity={0.5}/>;
         })()}
         <circle cx={originX} cy={originY} r={Math.max(2, S * 0.015) / tvEz} fill="#334155"/>
         {/* Ring markers: concentric rings — centered on marker's own Z-origin */}
@@ -529,7 +538,7 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
         {singleDir.filter(m => filterMarcador(m, false)).map((m, mi) => {
           const c = parseConfigToContatos(m.config);
           const vec = dirVector3D(c, m.amp || 0);
-          if (!vec || !isFinite(vec.amp)) return null;
+          if (!vec || !isFinite(vec.ux) || !isFinite(vec.uz)) return null;
           const { px: ux, py: uy } = getXY(vec);
           const r = toR(vec.amp || 0);
           const mOY = itemOriginY(m.config, showSchematic);
@@ -552,7 +561,7 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
         {multiDir.filter(m => filterMarcador(m, true)).map((m, mi) => {
           const c = parseConfigToContatos(m.config);
           const vec = dirVector3D(c, m.amp || 0);
-          if (!vec || !isFinite(vec.amp)) return null;
+          if (!vec || !isFinite(vec.ux) || !isFinite(vec.uz)) return null;
           const { px: ux, py: uy } = getXY(vec);
           const r = toR(vec.amp || 0);
           const mOY = itemOriginY(m.config, showSchematic);
@@ -581,13 +590,14 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
           if (isRing && !mostrarRing) return null;
           if (!isRing && !mostrarSingleDir) return null;
           const hVec = Object.keys(hContatos).length > 0 ? dirVector3D(hContatos, h.amp || 0) : null;
-          if (!hVec) return null;
+          if (!hVec || !isFinite(hVec.ux) || !isFinite(hVec.uz)) return null;
           const cor = h.efeito === 'bom' ? '#10b981'
             : h.efeito === 'ruim' ? '#f43f5e'
             : h.efeito === 'pouco' ? '#94a3b8' : '#67e8f9';
           const opacity = Math.max(0.35, opacidadeMarcador(h.date || 0, sessaoAtualTimestamp || Date.now()));
           const hr = toR(hVec.amp || 0);
           const hOY = itemOriginY(h.config, showSchematic);
+          if (!isFinite(hOY)) return null;
           if (isRing) {
             return (
               <g key={`previo-${hi}`} opacity={opacity}>
@@ -598,6 +608,7 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
           }
           const { px: hux, py: huy } = getXY(hVec);
           const hx = originX + hux * hr, hy = hOY - huy * hr;
+          if (!isFinite(hx) || !isFinite(hy)) return null;
           return (
             <g key={`previo-${hi}`} opacity={opacity}>
               <title>{`[prev-dir] ${h.config} | ${h.amp}mA | ${h.efeito}`}</title>
