@@ -50,12 +50,9 @@ const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey
   };
   const onPdPointerUp = (e) => { panRef.current = null; };
   // Fix 2: maxAmp from actual displayed data
-  const allAmps = [
-    ampAtual || 0,
-    ...marcadores.map(m => m.amp || 0),
-    ...(historicoRef || []).map(h => h.amp || 0),
-  ];
-  const maxAmp = Math.max(maxAmpProp || 0, ...allAmps, 1);
+  let maxAmp = Math.max(maxAmpProp || 0, ampAtual || 0, 1);
+  for (const m of marcadores) if ((m.amp || 0) > maxAmp) maxAmp = m.amp;
+  for (const h of (historicoRef || [])) if ((h.amp || 0) > maxAmp) maxAmp = h.amp;
   const toR = (amp) => (Math.min(Math.max(amp,0), maxAmp) / maxAmp) * R;
   const rings = [];
   for (let v = 1; v <= Math.ceil(maxAmp); v++) rings.push(v);
@@ -284,13 +281,18 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
     return levels.some(l => currentLevel.includes(l));
   };
 
-  const marcadoresSingleDirExtras = mostrarSingleDir ? allRing.filter(m => {
-    const c = parseConfigToContatos(m.config);
-    return classifyStim(c, 'directional') === 'single-dir';
-  }) : [];
+  // Cache classifyStim results to avoid recomputing for each filter
+  const ringClassCache = new Map();
+  const getStimType = (m) => {
+    if (!ringClassCache.has(m.config)) {
+      try { ringClassCache.set(m.config, classifyStim(parseConfigToContatos(m.config), 'directional')); }
+      catch(e) { ringClassCache.set(m.config, 'ring'); }
+    }
+    return ringClassCache.get(m.config);
+  };
+  const marcadoresSingleDirExtras = mostrarSingleDir ? allRing.filter(m => getStimType(m) === 'single-dir') : [];
   const marcadoresRingExtras = mostrarRing ? allRing.filter(m => {
-    const c = parseConfigToContatos(m.config);
-    const st = classifyStim(c, 'directional');
+    const st = getStimType(m);
     return st === 'ring' || (!getDirLevel(m.config) && st !== 'single-dir');
   }) : [];
 
@@ -305,30 +307,31 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
 
   // Group by PW or Freq
   const byGroup = {};
-  const allMarcadores = [...marcadores, ...marcadoresSingleDirExtras];
+  const marcadoresSet = new Set(marcadores); // O(1) lookup vs O(n) includes()
+  // Deduplicate: marcadoresSingleDirExtras may overlap with marcadores when in 3d mode
+  const allMarcadores = [...marcadores, ...marcadoresSingleDirExtras.filter(m => !marcadoresSet.has(m))];
   allMarcadores.forEach(m => {
     const key = String(agruparPorFreq ? (m.freq || 130) : (m.pw || 60));
     if (!byGroup[key]) byGroup[key] = { multiDir: [], singleDir: [] };
-    if (marcadores.includes(m)) byGroup[key].multiDir.push(m);
+    if (marcadoresSet.has(m)) byGroup[key].multiDir.push(m);
     else byGroup[key].singleDir.push(m);
   });
   const histByGroup3D = {};
+  const MAX_HIST_PER_GROUP = 30; // cap to prevent render slowdown with many sessions
   (historicoRef || []).forEach(h => {
     if (mostrarPrevios && isSimilar(h.config)) {
       const key = String(agruparPorFreq ? (h.freq || 130) : (h.pw || 60));
       if (!histByGroup3D[key]) histByGroup3D[key] = [];
-      histByGroup3D[key].push(h);
+      if (histByGroup3D[key].length < MAX_HIST_PER_GROUP) histByGroup3D[key].push(h);
     }
   });
 
   // Fix 2: compute effective maxAmp from all visible data
-  const allAmps = [
-    ampAtual || 0,
-    ...marcadores.map(m => m.amp || 0),
-    ...allRing.map(m => m.amp || 0),
-    ...(historicoRef || []).map(h => h.amp || 0),
-  ];
-  const maxAmp = Math.max(maxAmpProp || 0, ...allAmps, 1);
+  // Avoid Math.max(...hugeArray) stack overflow — use reduce instead
+  let maxAmp = Math.max(maxAmpProp || 0, ampAtual || 0, 1);
+  for (const m of marcadores) if ((m.amp || 0) > maxAmp) maxAmp = m.amp;
+  for (const m of allRing) if ((m.amp || 0) > maxAmp) maxAmp = m.amp;
+  for (const h of (historicoRef || [])) if ((h.amp || 0) > maxAmp) maxAmp = h.amp;
 
   const toR = (amp) => (Math.min(Math.max(amp, 0), maxAmp) / maxAmp) * R;
   const rings = [];
@@ -344,7 +347,8 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
     ...Object.keys(byGroup),
     ...marcadoresRingExtras.map(m => String(agruparPorFreq ? (m.freq || 130) : (m.pw || 60))),
     ...Object.keys(histByGroup3D)
-  ])].sort((a, b) => +a - +b);
+  ])].sort((a, b) => +a - +b)
+    .slice(0, 8); // cap at 8 groups to prevent render explosion
   allKeys.forEach(k => { if (!byGroup[k]) byGroup[k] = { multiDir: [], singleDir: [] }; });
 
   const curVec = programaContatos ? dirVector3D(programaContatos, ampAtual || 0) : null;
