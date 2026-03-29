@@ -124,7 +124,7 @@ const VisualizadorEletrodo = ({ lado, tipoEletrodo, contatos, onChangeState, onC
 
 
 
-const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, onUpdateProg, onUpdateState, onUpdatePerc, historicoRef, isMatchExato, marcadores, marcadoresRing, onAdicionarMarcador, onDesfazerMarcadores, cycling, onToggleCycling, impedancia, onImpedanciaChange, ignorarPerc }) => {
+const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, onUpdateProg, onUpdateState, onUpdatePerc, historicoRef, isMatchExato, marcadores, marcadoresRing, marcadoresTodosL, historicoTodos, onAdicionarMarcador, onDesfazerMarcadores, cycling, onToggleCycling, impedancia, onImpedanciaChange, ignorarPerc }) => {
   const listaColaterais = ["Parestesia", "Cápsula", "Disartria", "Outros"];
   const listaPositivos = ["tremor", "rigidez", "bradicinesia"];
   const configStr = getStringConfig(programa.contatos, ignorarPerc);
@@ -169,7 +169,7 @@ const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, o
         <div className="w-full flex flex-col justify-center flex-1">
           <ControleParametro 
             label="Amplitude" valor={programa.amp} unidade="mA" step={0.1} min={0} max={8}
-            onChange={(v) => onUpdateProg(lado, index, 'amp', v)} isAmplitude={true} historicoRef={historicoRef} marcadores={marcadores} marcadoresRing={marcadoresRing} tipoEletrodo={tipoEletrodo} programaContatos={programa.contatos} sessaoAtualTimestamp={historicoRef.current?.[0]?.timestamp || Date.now()}
+            onChange={(v) => onUpdateProg(lado, index, 'amp', v)} isAmplitude={true} historicoRef={historicoRef} marcadores={marcadores} marcadoresRing={marcadoresRing} marcadoresTodosL={marcadoresTodosL} historicoTodos={historicoTodos} tipoEletrodo={tipoEletrodo} programaContatos={programa.contatos} sessaoAtualTimestamp={historicoRef.current?.[0]?.timestamp || Date.now()}
           />
           <div className="flex flex-col mt-2">
             <ControleParametro label="Pulso" valor={programa.pw} unidade="µs" step={10} min={30} max={210} onChange={(v) => onUpdateProg(lado, index, 'pw', v)}/>

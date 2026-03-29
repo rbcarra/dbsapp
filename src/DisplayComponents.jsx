@@ -16,6 +16,9 @@ const CONTACT_ANTERIOR_ANGLES = {
 
 const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey, sessaoAtualTimestamp, programaContatos, ampAtual, labelGrupo, mostrarPositivos = true, mostrarNegativos = true, mostrarPrevios = true, anteriorContact = 'A', onOpenFullscreen, forcedSize }) => {
   const [isZoomed, setIsZoomed] = React.useState(false);
+  const [zoomLevel, setZoomLevel] = React.useState(1);
+  const [panOffset, setPanOffset] = React.useState({ x: 0, y: 0 });
+  const panRef = React.useRef(null);
   const S = forcedSize ?? (isZoomed ? 300 : 160);
   const C = S / 2, margin = S * 0.14, R = C - margin;
   const anteriorRad = (CONTACT_ANTERIOR_ANGLES[anteriorContact] ?? 90) * Math.PI / 180;
@@ -24,6 +27,28 @@ const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey
     rx: ux * Math.cos(xyTheta2D) - uy * Math.sin(xyTheta2D),
     ry: ux * Math.sin(xyTheta2D) + uy * Math.cos(xyTheta2D),
   });
+  // ViewBox for zoom+pan: shrink the visible area, offset by pan
+  const vpW = S / zoomLevel, vpH = S / zoomLevel;
+  const vpX = C + panOffset.x - vpW / 2;
+  const vpY = C + panOffset.y - vpH / 2;
+  const vb2D = `${vpX} ${vpY} ${vpW} ${vpH}`;
+  // Element size divisor: keeps elements proportional (except electrode)
+  const ez = zoomLevel; // divide element sizes by this
+  // Pan handlers
+  const onPdPointerDown = (e) => {
+    if (e.button !== 0) return;
+    panRef.current = { startX: e.clientX, startY: e.clientY, ox: panOffset.x, oy: panOffset.y };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.stopPropagation();
+  };
+  const onPdPointerMove = (e) => {
+    if (!panRef.current) return;
+    const scale = vpW / S; // SVG units per pixel
+    const dx = (e.clientX - panRef.current.startX) * scale * -1;
+    const dy = (e.clientY - panRef.current.startY) * scale * -1;
+    setPanOffset({ x: panRef.current.ox + dx, y: panRef.current.oy + dy });
+  };
+  const onPdPointerUp = (e) => { panRef.current = null; };
   // Fix 2: maxAmp from actual displayed data
   const allAmps = [
     ampAtual || 0,
@@ -47,13 +72,17 @@ const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey
             className="absolute top-0.5 right-0.5 z-10 w-4 h-4 rounded bg-slate-200/80 hover:bg-slate-300 text-slate-500 text-[8px] flex items-center justify-center"
             title="Abrir em tela cheia">⛶</button>
         )}
-        <svg width={S} height={S} viewBox={`0 0 ${S} ${S}`}>
+        <svg width={S} height={S} viewBox={vb2D}
+          onPointerDown={zoomLevel > 1 ? onPdPointerDown : undefined}
+          onPointerMove={zoomLevel > 1 ? onPdPointerMove : undefined}
+          onPointerUp={zoomLevel > 1 ? onPdPointerUp : undefined}
+          style={{ cursor: zoomLevel > 1 ? 'grab' : 'pointer' }}>
           <rect width={S} height={S} fill="#ffffff" rx="8"/>
           {rings.map(v => (
             <g key={v}>
               <circle cx={C} cy={C} r={toR(v)} fill="none"
                 stroke={v === Math.ceil(maxAmp) ? '#475569' : '#cbd5e1'}
-                strokeWidth={v === Math.ceil(maxAmp) ? 1.5 : 0.5}
+                strokeWidth={(v === Math.ceil(maxAmp) ? 1.5 : 0.5) / ez}
                 strokeDasharray={v < maxAmp ? '2,2' : undefined}/>
               <text x={C + toR(v) + 2} y={C - 2} fontSize={Math.max(5, S*0.033)} fill="#94a3b8">{v}mA</text>
             </g>
@@ -75,7 +104,7 @@ const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey
           {currentVec && currentAmpEf > 0 && (() => {
             const {rx, ry} = rot2D(currentVec.ux, currentVec.uy);
             return <line x1={C} y1={C} x2={C + rx*toR(currentAmpEf)} y2={C - ry*toR(currentAmpEf)}
-              stroke="#6366f1" strokeWidth={2} strokeDasharray="4,3" opacity={0.5}/>;
+              stroke="#6366f1" strokeWidth={2/ez} strokeDasharray="4,3" opacity={0.5}/>;
           })()}
           <circle cx={C} cy={C} r={Math.max(2, S*0.015)} fill="#334155"/>
 
@@ -102,8 +131,8 @@ const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey
             return (
               <g key={`hist-${hi}`} opacity={opacity}>
                 <title>{`[prev-dir] ${h.config} | ${h.amp}mA | ${h.efeito}`}</title>
-                <circle cx={px} cy={py} r={Math.max(4, S * 0.033)}
-                  fill={cor} fillOpacity={0.25} stroke={cor} strokeWidth={1.5}/>
+                <circle cx={px} cy={py} r={Math.max(4, S * 0.033) / ez}
+                  fill={cor} fillOpacity={0.25} stroke={cor} strokeWidth={1.5/ez}/>
               </g>
             );
           })}
@@ -135,6 +164,23 @@ const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey
         </svg>
         {isZoomed && <div className="absolute top-1 right-2 text-[9px] text-slate-500 font-bold bg-white/80 px-1 rounded">×</div>}
       </div>
+      {/* Zoom slider */}
+      {(isZoomed || forcedSize) && (
+        <div className="flex items-center gap-1.5 w-full px-1 mt-0.5">
+          <span className="text-[7px] text-slate-400 shrink-0">🔍</span>
+          <input type="range" min={1} max={8} step={0.5} value={zoomLevel}
+            onChange={e => { setZoomLevel(parseFloat(e.target.value)); setPanOffset({x:0,y:0}); }}
+            className="flex-1 h-1 accent-indigo-500 cursor-pointer"
+            onClick={e => e.stopPropagation()}
+            onPointerDown={e => e.stopPropagation()}
+          />
+          <span className="text-[7px] text-slate-400 shrink-0 w-6">{zoomLevel.toFixed(1)}×</span>
+          {(zoomLevel !== 1 || panOffset.x !== 0 || panOffset.y !== 0) && (
+            <button onClick={e => { e.stopPropagation(); setZoomLevel(1); setPanOffset({x:0,y:0}); }}
+              className="text-[7px] text-slate-500 hover:text-slate-700 px-1 py-0 rounded bg-slate-100">↺</button>
+          )}
+        </div>
+      )}
     </div>
   );
 };
@@ -328,6 +374,26 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
     );
   };
 
+  // ViewBox for zoom+pan (shared across all 3 projection SVGs)
+  const tvVpW = S / tvZoom, tvVpH = S / tvZoom;
+  const tvVpX = C + tvPan.x - tvVpW / 2;
+  const tvVpY = C + tvPan.y - tvVpH / 2;
+  const tvVB = `${tvVpX} ${tvVpY} ${tvVpW} ${tvVpH}`;
+  const tvEz = tvZoom; // divide element sizes by this
+  const onTvPointerDown = (e) => {
+    if (e.button !== 0) return;
+    const scale = tvVpW / S;
+    tvPanRef.current = { startX: e.clientX, startY: e.clientY, ox: tvPan.x, oy: tvPan.y, scale };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onTvPointerMove = (e) => {
+    if (!tvPanRef.current) return;
+    const dx = (e.clientX - tvPanRef.current.startX) * tvPanRef.current.scale * -1;
+    const dy = (e.clientY - tvPanRef.current.startY) * tvPanRef.current.scale * -1;
+    setTvPan({ x: tvPanRef.current.ox + dx, y: tvPanRef.current.oy + dy });
+  };
+  const onTvPointerUp = () => { tvPanRef.current = null; };
+
   // Rotation from contact-anterior selection
   const anteriorRad = anteriorAngle * Math.PI / 180;
   // θ for XY: rotate so anterior points to SVG bottom (= math -Y direction)
@@ -405,17 +471,21 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
     const originY = showSchematic ? zOriginSvg : C;
 
     return (
-      <svg key={`${grpKey}-${showSchematic}`} width={S} height={S} viewBox={`0 0 ${S} ${S}`}>
+      <svg key={`${grpKey}-${showSchematic}`} width={S} height={S} viewBox={tvVB}
+        onPointerDown={tvZoom > 1 ? onTvPointerDown : undefined}
+        onPointerMove={tvZoom > 1 ? onTvPointerMove : undefined}
+        onPointerUp={tvZoom > 1 ? onTvPointerUp : undefined}
+        style={{ cursor: tvZoom > 1 ? 'grab' : 'default' }}>
         <rect width={S} height={S} fill="#ffffff" rx="6"/>
         {/* Grid rings centered on current program origin */}
         {rings.map(v => (
           <circle key={v} cx={C} cy={originY} r={toR(v)} fill="none"
             stroke={v === Math.ceil(maxAmp) ? '#475569' : '#e2e8f0'}
-            strokeWidth={v === Math.ceil(maxAmp) ? 1.5 : 0.5}
+            strokeWidth={(v === Math.ceil(maxAmp) ? 1.5 : 0.5) / tvEz}
             strokeDasharray={v < maxAmp ? '2,2' : undefined}/>
         ))}
-        <line x1={margin} y1={originY} x2={S - margin} y2={originY} stroke="#e2e8f0" strokeWidth={0.5}/>
-        <line x1={C} y1={margin} x2={C} y2={S - margin} stroke="#e2e8f0" strokeWidth={0.5}/>
+        <line x1={margin} y1={originY} x2={S - margin} y2={originY} stroke="#e2e8f0" strokeWidth={0.5/tvEz}/>
+        <line x1={C} y1={margin} x2={C} y2={S - margin} stroke="#e2e8f0" strokeWidth={0.5/tvEz}/>
         {dirLabels.map(({ letter, lx, ly }) => {
           const labelR = toR(Math.ceil(maxAmp)) + S * 0.07;
           return <text key={letter} x={C + lx * labelR} y={originY - ly * labelR}
@@ -426,12 +496,12 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
         {/* Current stim line from its own origin */}
         {curVec && (() => {
           const { px: cux, py: cuy } = getXY(curVec);
-          const cr = toR(curVec.amp || 0);
+          const cr = toR(curVec.amp || 0); const _tvEz = tvEz;
           return cr > 0 ? <line x1={originX} y1={originY}
             x2={originX + cux * cr} y2={originY - cuy * cr}
-            stroke="#6366f1" strokeWidth={2} strokeDasharray="4,3" opacity={0.5}/> : null;
+            stroke="#6366f1" strokeWidth={2/tvEz} strokeDasharray="4,3" opacity={0.5}/> : null;
         })()}
-        <circle cx={originX} cy={originY} r={Math.max(2, S * 0.015)} fill="#334155"/>
+        <circle cx={originX} cy={originY} r={Math.max(2, S * 0.015) / tvEz} fill="#334155"/>
         {/* Ring markers: concentric rings — centered on marker's own Z-origin */}
         {ringMks.filter(m => filterMarcador(m, false)).map((m, mi) => {
           const mOY = itemOriginY(m.config, showSchematic);
@@ -443,7 +513,7 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
           return (
             <g key={`ring-${mi}`} opacity={opacity}>
               <title>{`[ring] ${m.tipo} | ${m.amp}mA`}</title>
-              <circle cx={originX} cy={mOY} r={rRing} fill="none" stroke={fill} strokeWidth={1.5} strokeDasharray="2,2" opacity={0.5}/>
+              <circle cx={originX} cy={mOY} r={rRing} fill="none" stroke={fill} strokeWidth={1.5/tvEz} strokeDasharray="2,2" opacity={0.5}/>
               <text x={originX + rRing * 0.707 + 2} y={mOY - rRing * 0.707 - 2}
                 textAnchor="middle" fontSize={Math.max(5, S * 0.04)} fill={fill} fontWeight="bold">{info.letra}</text>
             </g>
@@ -464,7 +534,7 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
           return (
             <g key={`sd-${mi}`} opacity={opacity * 0.7}>
               <title>{`[single] ${m.tipo} | ${m.amp}mA`}</title>
-              <circle cx={svgX} cy={svgY} r={Math.max(3, S * 0.025)} fill={fill} fillOpacity={0.2} stroke={fill} strokeWidth={1} strokeDasharray="1,1"/>
+              <circle cx={svgX} cy={svgY} r={Math.max(3, S * 0.025)/tvEz} fill={fill} fillOpacity={0.2} stroke={fill} strokeWidth={1/tvEz} strokeDasharray="1,1"/>
               <text x={svgX} y={svgY} textAnchor="middle" dominantBaseline="middle"
                 fontSize={Math.max(5, S * 0.038)} fill="#fff" fontWeight="bold" stroke={fill} strokeWidth={0.3}>{info.letra}</text>
             </g>
@@ -486,7 +556,7 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
           return (
             <g key={`md-${mi}`} opacity={opacity}>
               <title>{`${m.tipo} | ${m.amp}mA | ${m.freq}Hz`}</title>
-              <circle cx={svgX} cy={svgY} r={markerR} fill={fill} fillOpacity={0.3} stroke={fill} strokeWidth={1.5}/>
+              <circle cx={svgX} cy={svgY} r={markerR/tvEz} fill={fill} fillOpacity={0.3} stroke={fill} strokeWidth={1.5/tvEz}/>
               <text x={svgX} y={svgY} textAnchor="middle" dominantBaseline="middle"
                 fontSize={Math.max(6, S * 0.045)} fill="#fff" fontWeight="bold" stroke={fill} strokeWidth={0.3}>{info.letra}</text>
             </g>
@@ -510,7 +580,7 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
             return (
               <g key={`previo-${hi}`} opacity={opacity}>
                 <title>{`[prev-ring] ${h.config} | ${h.amp}mA | ${h.efeito}`}</title>
-                <circle cx={originX} cy={hOY} r={hr} fill="none" stroke={cor} strokeWidth={1.5} strokeDasharray="3,2" opacity={0.6}/>
+                <circle cx={originX} cy={hOY} r={hr} fill="none" stroke={cor} strokeWidth={1.5/tvEz} strokeDasharray="3,2" opacity={0.6}/>
               </g>
             );
           }
@@ -519,8 +589,8 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
           return (
             <g key={`previo-${hi}`} opacity={opacity}>
               <title>{`[prev-dir] ${h.config} | ${h.amp}mA | ${h.efeito}`}</title>
-              <circle cx={hx} cy={hy} r={Math.max(3.5, S * 0.028)}
-                fill={cor} fillOpacity={0.3} stroke={cor} strokeWidth={1.5}/>
+              <circle cx={hx} cy={hy} r={Math.max(3.5, S * 0.028)/tvEz}
+                fill={cor} fillOpacity={0.3} stroke={cor} strokeWidth={1.5/tvEz}/>
             </g>
           );
         })}
@@ -557,6 +627,18 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
             <input type="checkbox" checked={apenasSimilar} onChange={e => setApenasSimilar(e.target.checked)} className="accent-amber-500 w-3 h-3"/>
             <span className="text-[8px] text-amber-600">Sim.</span>
           </label>
+          {/* Zoom slider */}
+          <div className="flex items-center gap-1 ml-1">
+            <span className="text-[7px] text-slate-400">🔍</span>
+            <input type="range" min={1} max={8} step={0.5} value={tvZoom}
+              onChange={e => { setTvZoom(parseFloat(e.target.value)); setTvPan({x:0,y:0}); }}
+              className="w-16 h-1 accent-indigo-500 cursor-pointer"/>
+            <span className="text-[7px] text-slate-400 w-6">{tvZoom.toFixed(1)}×</span>
+            {(tvZoom !== 1 || tvPan.x !== 0 || tvPan.y !== 0) && (
+              <button onClick={() => { setTvZoom(1); setTvPan({x:0,y:0}); }}
+                className="text-[7px] text-slate-500 hover:text-slate-700 px-1 rounded bg-slate-100">↺</button>
+            )}
+          </div>
           <button onClick={() => setIsZoomed(!isZoomed)} className="text-[8px] text-slate-500 hover:text-slate-700 font-bold px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200">
             {isZoomed ? '−' : '+'}
           </button>
@@ -783,11 +865,16 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
   );
 };
 
-const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, isAmplitude, historicoRef, marcadores, marcadoresRing, sessaoAtualTimestamp, tipoEletrodo, programaContatos }) => {
+const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, isAmplitude, historicoRef, marcadores, marcadoresRing, marcadoresTodosL, historicoTodos, sessaoAtualTimestamp, tipoEletrodo, programaContatos }) => {
   const [agruparPorFreq, setAgruparPorFreq] = React.useState(false);
   const [forcarMultiDir, setForcarMultiDir] = React.useState(false);
   const [anteriorContact, setAnteriorContact] = React.useState('A');
   const [fullscreenDisplay, setFullscreenDisplay] = React.useState(null); // {tipo, grpKey}
+  // modoVis: 'auto' | '3d' | 'timeline'
+  // 'auto'     → normal behavior based on stimType
+  // '3d'       → force TripleView3D with ALL markers (no contact filter)
+  // 'timeline' → force TimelineHistorico with exact-config filter
+  const [modoVis, setModoVis] = React.useState('auto');
 
   return (
   <div className="flex flex-col mb-3">
@@ -810,6 +897,23 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, is
             title="Forçar visão 3D multi-dir">
             3D
           </button>
+          {/* Visualization mode selector */}
+          <div className="flex items-center gap-0.5 border border-slate-200 rounded overflow-hidden">
+            {[
+              ['auto', 'Auto', 'Modo automático (baseado no tipo de estimulação)'],
+              ['3d',   '⬡ 3D', 'Visão 3D com todos os marcadores de qualquer contato'],
+              ['timeline', '📈 TL', 'Timeline com filtro de contatos exatos'],
+            ].map(([mode, label, title]) => (
+              <button key={mode} onClick={() => setModoVis(mode)} title={title}
+                className={`text-[7px] font-bold px-1.5 py-0.5 transition-all ${
+                  modoVis === mode
+                    ? 'bg-slate-700 text-white'
+                    : 'bg-slate-50 text-slate-400 hover:bg-slate-100'
+                }`}>
+                {label}
+              </button>
+            ))}
+          </div>
           {tipoEletrodo === 'directional' && (
             <div className="flex items-center gap-1">
               <span className="text-[7px] text-slate-400 uppercase font-bold">Ant.:</span>
@@ -822,10 +926,28 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, is
         </div>
       );
 
-      if (stimType === 'single-dir') {
-        return <>{toggleBar}<DirectionalHistorico marcadores={marcadores} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} onOpenFullscreen={(grpKey) => setFullscreenDisplay({tipo:'single', grpKey})}/></>;
-      } else if (stimType === 'multi-dir') {
-        return <>{toggleBar}<TripleView3D marcadores={marcadores} marcadoresRing={marcadoresRing} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} onOpenFullscreen={() => setFullscreenDisplay({tipo:'multi'})}/></>;
+      // Effective markers and historicoRef based on modoVis
+      const marcadoresDisplay = modoVis === '3d'
+        ? (marcadoresTodosL || marcadores)  // ALL markers for 3D view
+        : marcadores;
+      const historicoDisplay = modoVis === '3d'
+        ? (historicoTodos || historicoRef)  // ALL sessions for 3D
+        : modoVis === 'timeline'
+          ? (historicoRef)                  // filtered by exact config (passed from App)
+          : historicoRef;
+      const marcadoresRingDisplay = modoVis === '3d'
+        ? (marcadoresTodosL || marcadoresRing)  // ALL for 3D
+        : marcadoresRing;
+
+      // Which component to render
+      const efectiveMode = modoVis === 'auto' ? stimType
+        : modoVis === '3d'       ? 'multi-dir'
+        : /* timeline */           'timeline';
+
+      if (efectiveMode === 'single-dir') {
+        return <>{toggleBar}<DirectionalHistorico marcadores={marcadoresDisplay} historicoRef={historicoDisplay} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} onOpenFullscreen={(grpKey) => setFullscreenDisplay({tipo:'single', grpKey})}/></>;
+      } else if (efectiveMode === 'multi-dir') {
+        return <>{toggleBar}<TripleView3D marcadores={marcadoresDisplay} marcadoresRing={marcadoresRingDisplay} historicoRef={historicoDisplay} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} onOpenFullscreen={() => setFullscreenDisplay({tipo:'multi'})}/></>;
       } else {
         return <>{toggleBar}<TimelineHistorico historicoRef={historicoRef} maxAmp={max} marcadores={marcadores} sessaoAtualTimestamp={sessaoAtualTimestamp} agruparPorFreq={agruparPorFreq}/></>;
       }

@@ -1499,6 +1499,11 @@ ${progTexto}Avaliação: ${textoEfeito}
                     }
                     return marcadoresHistoricos.L.filter(m => m.config === configStr && !seen.has(m.id));
                   })();
+                  // ALL markers for 3D view (no contact filter) — used when user forces 3D
+                  const marcadoresTodosL = [...marcadoresClinicosL,
+                    ...marcadoresHistoricos.L.filter(m => !marcadoresClinicosL.some(mc => mc.id === m.id))];
+                  // ALL sessions for 3D historicoRef (no config filter)
+                  const historicoTodosL = historicoReal.filter(h => h.lado === 'L');
                           return (
                     <div key={`L-${idx}`} className="w-[340px] shrink-0">
                       <RenderPrograma
@@ -1506,6 +1511,9 @@ ${progTexto}Avaliação: ${textoEfeito}
                         isMatchExato={isMatch} historicoRef={hist}
                         marcadores={[...marcadoresSessaoL, ...marcadoresHistL]}
                         marcadoresRing={marcadoresHistoricos.L.concat(marcadoresClinicosL)}
+                        marcadoresTodosL={marcadoresTodosL}
+                        historicoTodos={historicoTodosL}
+                        configStr={configStr}
                         onAdicionarMarcador={(tipo) => adicionarMarcadorClinico('L', tipo, idx)}
                         onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('L', cfg)}
                         cycling={cyclingL} onToggleCycling={() => setCyclingL(v => !v)}
@@ -1556,6 +1564,9 @@ ${progTexto}Avaliação: ${textoEfeito}
                     }
                     return marcadoresHistoricos.R.filter(m => m.config === configStr && !seen.has(m.id));
                   })();
+                  const marcadoresTodosR = [...marcadoresClinicosR,
+                    ...marcadoresHistoricos.R.filter(m => !marcadoresClinicosR.some(mc => mc.id === m.id))];
+                  const historicoTodosR = historicoReal.filter(h => h.lado === 'R');
                   const marcadoresRingR = marcadoresClinicosR.concat(marcadoresHistoricos.R.filter(m => !marcadoresClinicosR.some(mc2=>mc2.id===m.id)));
                   return (
                     <div key={`R-${idx}`} className="w-[340px] shrink-0">
@@ -1564,6 +1575,9 @@ ${progTexto}Avaliação: ${textoEfeito}
                         isMatchExato={isMatch} historicoRef={hist}
                         marcadores={[...marcadoresSessaoR, ...marcadoresHistR]}
                         marcadoresRing={marcadoresRingR}
+                        marcadoresTodosL={marcadoresTodosR}
+                        historicoTodos={historicoTodosR}
+                        configStr={configStr}
                         onAdicionarMarcador={(tipo) => adicionarMarcadorClinico('R', tipo, idx)}
                         onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('R', cfg)}
                         cycling={cyclingR} onToggleCycling={() => setCyclingR(v => !v)}
