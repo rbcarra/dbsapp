@@ -37,11 +37,11 @@ const getParam = (seg, unitPatterns) => {
 
 // Longest run of 0/+/- -- Correção 3: ignorar 5º símbolo (case marker)
 const extractContacts = (seg) => {
-  const clean = seg.replace(/bipolar/gi,'').replace(/\bC[+\-]?(?=[\s\/])/gi,'');
+  // Strip spaces between contact symbols so "+0 - -" → "+0--"
+  const spaceStripped = seg.replace(/([0+\-])\s+(?=[0+\-])/g, '$1');
+  const clean = spaceStripped.replace(/bipolar/gi,'').replace(/\bC[+\-]?(?=[\s\/])/gi,'');
   const matches = clean.match(/[0+\-]{2,}/g) || [];
   const best = matches.sort((a,b) => b.length-a.length)[0] || '';
-  // Se tiver 5 símbolos, o 5º é indicador de case (ex: "0-00+") — truncar para 4
-  // Truncar 5º símbolo APENAS se for '+' (indicador de case, ex: '0-00+')
   return (best.length === 5 && best[4] === '+') ? best.slice(0, 4) : best;
 };
 
@@ -157,14 +157,33 @@ const extractBatteryImpedance = (fullText) => {
 };
 
 // ─── PROGRAMMING PARSER ───────────────────────────────────────────────────
+const isImpedanceOnlyLine = (text) => {
+  // Lines like "Lead E 2108 1.2mA" or "Lead E 2108" where there's no pw/freq
+  // and the first number is 400-9999 (impedance range)
+  const pw = text.match(/\bpw\b|[µu]s\b|\bms\b/i);
+  const freq = text.match(/[Hh]z\b|\bfreq\b/i);
+  if (pw || freq) return false; // has pw or freq → real program
+  // Check if first significant number is impedance-range
+  const nums = [...text.matchAll(/([0-9]+[.,]?[0-9]*)/g)].map(m => parseFloat(m[1].replace(',','.')));
+  const hasImpedance = nums.some(n => n >= 400 && n <= 9999 && n === Math.floor(n));
+  const hasContacts = /[0+\-]{2,}/.test(text.replace(/([0+\-])\s+(?=[0+\-])/g,'$1'));
+  // If no contact pattern and has impedance-range number → skip as programming
+  return hasImpedance && !hasContacts;
+};
+
 const parseProgramming = (rawText) => {
   if (!rawText) return {};
   const result = {};
   let currentGroup = 'A';
+  let inGroupSection = false; // true after first explicit group header
 
   const push = (group, side, prog) => {
     if (!result[group]) result[group] = {};
     if (!result[group][side]) result[group][side] = [];
+    // Limit to 2 programs per side per group (interleaving cap)
+    if (result[group][side].length >= 2) return;
+    // Skip entries with no contacts and no meaningful amp
+    if (!prog.contatos && prog.amp === 0) return;
     result[group][side].push(prog);
   };
 
@@ -172,30 +191,40 @@ const parseProgramming = (rawText) => {
     const line = rawLine.trim();
     if (!line) continue;
 
+    // Skip comment/decision lines that start with - or • or #
+    if (/^[\-•#]/.test(line) && !/^[-]{2,}/.test(line)) continue;
+
     // Group header: "Grupo A", "GRUPO B (EM USO...)", "A:", "A- SEGURANÇA", bare "B"/"C"/"D"
     const gm =
-      line.match(/^grupo\s+([a-dA-D1-4])\b/i) ||   // "Grupo A", "GRUPO B ..."
-      line.match(/^([a-dA-D1-4])\s*[-:.]/) ||       // "A:", "A-", "A."
-      line.match(/^([a-dA-D1-4])\s*$/);             // bare "B" on its own line
+      line.match(/^grupo\s+([a-dA-D1-4])\b/i) ||
+      line.match(/^([a-dA-D1-4])\s*[-:.]/) ||
+      line.match(/^([a-dA-D1-4])\s*$/);
     if (gm) {
       const g = gm[1].toUpperCase();
       currentGroup = {'1':'A','2':'B','3':'C','4':'D'}[g] || g;
+      inGroupSection = true;
       continue;
     }
 
     // "Lead 1 (E): ..." ou "Lead 2 (D): ..."
     const m1 = line.match(/lead\s+(?:\d+\s+)?\(([^)]+)\)\s*[:](.*)/i);
-    if (m1) { push(currentGroup, parseSide(m1[1]), parseParams(m1[2]||line)); continue; }
+    if (m1) {
+      if (!isImpedanceOnlyLine(m1[2]||line)) push(currentGroup, parseSide(m1[1]), parseParams(m1[2]||line));
+      continue;
+    }
 
     // "Lead E: ...", "Lead D1: ...", "Lead 1: ...", "Lead 2: ..."
     const m2 = line.match(/lead\s*\(?([EDLRedlr12]\d*)\)?\s*[:/ ](.*)/i);
-    if (m2) { push(currentGroup, parseSide(m2[1]), parseParams(m2[2]||line)); continue; }
+    if (m2) {
+      if (!isImpedanceOnlyLine(m2[2]||line)) push(currentGroup, parseSide(m2[1]), parseParams(m2[2]||line));
+      continue;
+    }
 
     // Interleaving: "(E2): ...", "(D1): ..."
     const m3 = line.match(/^\(([EDLRedlr]\d*)\)\s*[:](.*)/i);
     if (m3) { push(currentGroup, parseSide(m3[1]), parseParams(m3[2]||line)); continue; }
 
-    // FIX 2: "ESQ ...", "DIR ..." (common abbreviations for left/right)
+    // "ESQ ...", "DIR ..."
     const mEsqDir = line.match(/^(ESQ|DIR|ESQUERDO|DIREITO)\s+(.+)/i);
     if (mEsqDir) {
       const side = /^(ESQ|ESQUERDO)/i.test(mEsqDir[1]) ? 'L' : 'R';
@@ -728,9 +757,39 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                  impedanciaL: impedanciaL || (impLFromProg ? String(impLFromProg) : ''),
                  impedanciaR: impedanciaR || (impRFromProg ? String(impRFromProg) : ''),
                  marcadoresClinicosL: marcadoresL,
-                 marcadoresClinicosR: marcadoresR };
+                 marcadoresClinicosR: marcadoresR,
+                 dateEstimated: !d.date };
       });
-      setReviewed(rows); setPhase('review');
+      // Estimate dates for sessions without a detected date
+      const toTs = (dateStr) => {
+        if (!dateStr) return null;
+        const parts = dateStr.split('/');
+        if (parts.length === 3) {
+          const d = parseInt(parts[0]), mo = parseInt(parts[1]);
+          const y = parseInt(parts[2].length === 2 ? '20'+parts[2] : parts[2]);
+          const dt = new Date(y, mo-1, d);
+          return isNaN(dt.getTime()) ? null : dt.getTime();
+        }
+        return null;
+      };
+      const toDateStr = (ts) => {
+        const d = new Date(ts);
+        return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+      };
+      const filledRows = rows.map((r, i) => {
+        if (!r.dateEstimated) return r;
+        // Find prev and next known dates
+        let prevTs = null, nextTs = null;
+        for (let j = i-1; j >= 0; j--) { const t = toTs(rows[j].date); if (t) { prevTs = t; break; } }
+        for (let j = i+1; j < rows.length; j++) { const t = toTs(rows[j].date); if (t) { nextTs = t; break; } }
+        let estTs;
+        if (prevTs && nextTs) estTs = Math.round((prevTs + nextTs) / 2);
+        else if (nextTs) estTs = nextTs - 6*30*24*60*60*1000; // 6 months before next
+        else if (prevTs) estTs = prevTs + 6*30*24*60*60*1000; // 6 months after prev
+        else return r;
+        return { ...r, date: toDateStr(estTs) + ' (estimado)' };
+      });
+      setReviewed(filledRows); setPhase('review');
     }
   };
 

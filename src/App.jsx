@@ -10,10 +10,11 @@ import { BlocoColapsavel, LoginModal, PatientSelector, ConfirmDialog } from './P
 import { VisualizadorEletrodo, RenderPrograma } from './ProgramComponents';
 import { TimelineHistorico } from './DisplayComponents';
 import { ExtractorModal } from './ExtractorComponents';
+import { UPDRSModal } from './UPDRSComponents';
 
 import { auth, db, appId } from './firebase';
 
-
+// Feito por Rafael Carra ao longo de muitos plantões do HC. 
 
 
 // --- APLICATIVO PRINCIPAL ---
@@ -64,6 +65,23 @@ export default function App() {
   const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, sessionId: null, mode: 'soft' });
   const [showMonopolar, setShowMonopolar] = useState(false);
   const [showExtrator, setShowExtrator] = useState(false);
+  const [showHistoricoText, setShowHistoricoText] = useState(false);
+  const [showUPDRS, setShowUPDRS] = useState(false);
+  const [autoSaveStatus, setAutoSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
+  // Helper: cap programs to max 2 per side in any dadosGrupos object
+  const capPrograms = (grupos) => {
+    if (!grupos) return grupos;
+    const safe = JSON.parse(JSON.stringify(grupos));
+    Object.values(safe).forEach(grupo => {
+      ['L','R'].forEach(lado => {
+        if (Array.isArray(grupo[lado]) && grupo[lado].length > 2)
+          grupo[lado] = grupo[lado].slice(0, 2);
+      });
+    });
+    return safe;
+  };
+
+
   const [considerarAmplitude, setConsiderarAmplitude] = useState(false);
   const [blocosAbertos, setBlocosAbertos] = useState({
     progAnterior: true,
@@ -163,7 +181,19 @@ export default function App() {
         if (tempDoc.exists()) {
           const d = tempDoc.data();
           if (d.tipoEletrodo) setTipoEletrodo(d.tipoEletrodo);
-          if (d.dadosGrupos) setDadosGrupos(d.dadosGrupos);
+          if (d.dadosGrupos) {
+            // Defensive: cap programs to max 2 per side to prevent render crashes
+            const safeGrupos = JSON.parse(JSON.stringify(d.dadosGrupos));
+            Object.values(safeGrupos).forEach(grupo => {
+              ['L', 'R'].forEach(lado => {
+                if (Array.isArray(grupo[lado]) && grupo[lado].length > 2) {
+                  console.warn(`Session has ${grupo[lado].length} programs for ${lado}, capping to 2`);
+                  grupo[lado] = grupo[lado].slice(0, 2);
+                }
+              });
+            });
+            setDadosGrupos(safeGrupos);
+          }
           if (d.clinica) setClinica(d.clinica);
           if (d.efeitosColaterais) setEfeitosColaterais(d.efeitosColaterais);
           if (d.notasLivres !== undefined) setNotasLivres(d.notasLivres);
@@ -199,6 +229,7 @@ export default function App() {
   const historicoReal = useMemo(() => {
     const map = new Map();
     sessions.filter(s => s.type === 'active').forEach(sess => {
+      try {
       Object.entries(sess.dadosGrupos || {}).forEach(([nomeGrupo, grupo]) => {
         ['L', 'R'].forEach(lado => {
           (grupo[lado] || []).forEach(prog => {
@@ -230,6 +261,7 @@ export default function App() {
           });
         });
       });
+      } catch(e) { console.error('historicoReal error for session', sess?.id, e); }
     });
     return Array.from(map.values());
   }, [sessions, considerarAmplitude]);
@@ -238,15 +270,46 @@ export default function App() {
   const marcadoresHistoricos = useMemo(() => {
     const todos = { L: [], R: [] };
     sessions.filter(s => s.type === 'active').forEach(sess => {
-      ['L', 'R'].forEach(lado => {
-        const chave = lado === 'L' ? 'marcadoresClinicosL' : 'marcadoresClinicosR';
-        (sess[chave] || []).forEach(m => {
-          todos[lado].push({ ...m, sessionId: sess.id, sessionTimestamp: sess.timestamp });
+      try {
+        ['L', 'R'].forEach(lado => {
+          const chave = lado === 'L' ? 'marcadoresClinicosL' : 'marcadoresClinicosR';
+          (sess[chave] || []).forEach(m => {
+            todos[lado].push({ ...m, sessionId: sess.id, sessionTimestamp: sess.timestamp });
+          });
         });
-      });
+      } catch(e) { console.error('marcadoresHistoricos error', sess?.id, e); }
     });
     return todos;
   }, [sessions]);
+
+  // ── AUTO-SAVE: debounced, only when editing existing session ──────────────
+  const autoSaveTimerRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!editingSessionId || !user || !activePatient || isInitializing) return;
+    setAutoSaveStatus('saving');
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(async () => {
+      try {
+        const sessionData = {
+          patientId: activePatient.id,
+          timestamp: sessions.find(s => s.id === editingSessionId)?.timestamp || Date.now(),
+          type: 'active',
+          tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
+          voltagemBateria, impedanciaL, impedanciaR, cyclingL, cyclingR,
+          marcadoresClinicosL, marcadoresClinicosR
+        };
+        await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'sessions', editingSessionId), sessionData);
+        setAutoSaveStatus('saved');
+        setTimeout(() => setAutoSaveStatus('idle'), 3000);
+      } catch(err) {
+        console.error('Auto-save error:', err);
+        setAutoSaveStatus('error');
+      }
+    }, 1500);
+    return () => { if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current); };
+  }, [tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
+      voltagemBateria, impedanciaL, impedanciaR, cyclingL, cyclingR,
+      marcadoresClinicosL, marcadoresClinicosR, editingSessionId]);
 
   const gerarTextoProntuario = (grupos, eletrodo) => {
     let text = '';
@@ -740,7 +803,7 @@ export default function App() {
 
   const loadSession = (sess) => {
     setTipoEletrodo(sess.tipoEletrodo || '4-ring');
-    setDadosGrupos(sess.dadosGrupos);
+    setDadosGrupos(capPrograms(sess.dadosGrupos));
     setClinica(sess.clinica || { tremor: 0, rigidez: 0, bradicinesia: 0 });
     setEfeitosColaterais(sess.efeitosColaterais || { L: [], R: [] });
     setNotasLivres(sess.notasLivres || "");
@@ -761,7 +824,7 @@ export default function App() {
     const ultimaAtiva = sessions.find(s => s.type === 'active');
     if (ultimaAtiva) {
       setTipoEletrodo(ultimaAtiva.tipoEletrodo || '4-ring');
-      setDadosGrupos(ultimaAtiva.dadosGrupos);
+      setDadosGrupos(capPrograms(ultimaAtiva.dadosGrupos));
       setClinica(ultimaAtiva.clinica || { tremor: 0, rigidez: 0, bradicinesia: 0 });
       setEfeitosColaterais(ultimaAtiva.efeitosColaterais || { L: [], R: [] });
       setNotasLivres(ultimaAtiva.notasLivres || "");
@@ -1221,6 +1284,17 @@ ${progTexto}Avaliação: ${textoEfeito}
             </select>
           </div>
           
+          {/* Auto-save status */}
+          {editingSessionId && autoSaveStatus !== 'idle' && (
+            <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${
+              autoSaveStatus === 'saving' ? 'bg-amber-100 text-amber-700 animate-pulse' :
+              autoSaveStatus === 'saved'  ? 'bg-emerald-100 text-emerald-700' :
+              'bg-rose-100 text-rose-700'
+            }`}>
+              {autoSaveStatus === 'saving' ? '⟳ salvando...' : autoSaveStatus === 'saved' ? '✓ salvo' : '⚠ erro'}
+            </span>
+          )}
+          {editingSessionId && <span className="text-[9px] text-slate-500 font-mono hidden lg:inline">editando</span>}
           <button onClick={() => handleSalvarSessao(false)} className="px-3 py-1.5 rounded font-bold text-sm transition-colors shadow-sm whitespace-nowrap bg-indigo-600 hover:bg-indigo-700 text-white">
             Salvar Nova Sessão
           </button>
@@ -1270,12 +1344,31 @@ ${progTexto}Avaliação: ${textoEfeito}
           ) : (() => {
             const ultima = sessions.filter(s => s.type === 'active')[0];
             const ordem = ORDEM_TEXTO_BAIXO_CIMA[ultima.tipoEletrodo || '4-ring'];
+            const grupoA = ultima.dadosGrupos?.['A'] || {};
+
+            // Helper: compare prog config+amp+pw+freq against group A for a given side
+            const igualAoGrupoA = (grupo, lado) => {
+              if (grupo === 'A') return false; // grupo A always shows buttons
+              const progsA = grupoA[lado] || [];
+              const progsG = ultima.dadosGrupos?.[grupo]?.[lado] || [];
+              if (progsA.length !== progsG.length) return false;
+              return progsG.every((p, i) => {
+                const a = progsA[i];
+                if (!a) return false;
+                return getStringConfig(p.contatos) === getStringConfig(a.contatos)
+                  && p.amp === a.amp && p.pw === a.pw && p.freq === a.freq;
+              });
+            };
+
             return (
               <div className="flex flex-col gap-3">
                 {gruposComSessao.map(grupo => {
                   let linhasGrupo = [];
+                  const ladosMudados = [];
                   ['L','R'].forEach(lado => {
                     const leadStr = lado === 'L' ? 'E' : 'D';
+                    const igual = igualAoGrupoA(grupo, lado);
+                    if (!igual) ladosMudados.push(lado);
                     (ultima.dadosGrupos?.[grupo]?.[lado] || []).forEach((prog, idx) => {
                       const progs = ultima.dadosGrupos[grupo][lado];
                       const leadName = progs.length > 1 ? `Lead ${leadStr}${idx+1}` : `Lead ${leadStr}`;
@@ -1285,28 +1378,39 @@ ${progTexto}Avaliação: ${textoEfeito}
                         const perc = prog.contatos[c].perc;
                         return perc < 100 ? `${st}(${perc}%)` : st;
                       }).join('');
-                      linhasGrupo.push(`${leadName} ${contactStr} ${prog.amp?.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz`);
+                      const label = igual ? `${leadName} ${contactStr} ${prog.amp?.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz  [= Grupo A]`
+                                          : `${leadName} ${contactStr} ${prog.amp?.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz`;
+                      linhasGrupo.push(label);
                     });
                   });
+                  // Only show scoring buttons for sides with changed programming
+                  const mostrarBotoes = grupo === 'A' || ladosMudados.length > 0;
+                  const notaLado = ladosMudados.length === 1
+                    ? ` (${ladosMudados[0] === 'L' ? 'E' : 'D'} modificado)`
+                    : '';
                   return (
                     <div key={grupo} className="flex flex-col sm:flex-row sm:items-start gap-2 p-2 rounded-lg bg-slate-50 border border-slate-100">
                       <div className="shrink-0">
-                        <span className="text-xs font-black text-slate-700 block mb-1.5">Grupo {grupo}</span>
-                        <div className="flex flex-wrap gap-1">
-                          {[
-                            ['bom',    'Melhor grupo',  'bg-emerald-500 hover:bg-emerald-600 text-white'],
-                            ['neutro', 'Bom / Mantido', 'bg-blue-500 hover:bg-blue-600 text-white'],
-                            ['pouco',  'Pouco efeito',  'bg-slate-400 hover:bg-slate-500 text-white'],
-                            ['ruim',   'Col. - Marcha', 'bg-rose-400 hover:bg-rose-500 text-white'],
-                            ['ruim',   'Col. - Fala',   'bg-rose-600 hover:bg-rose-700 text-white'],
-                            ['ruim',   'Col. - Outro',  'bg-rose-800 hover:bg-rose-900 text-white'],
-                          ].map(([efVal, label, cls]) => (
-                            <button key={label} onClick={() => handleEfeitoGrupo(grupo, efVal, label)}
-                              className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all shadow-sm ${cls}`}>
-                              {label}
-                            </button>
-                          ))}
-                        </div>
+                        <span className="text-xs font-black text-slate-700 block mb-1.5">
+                          Grupo {grupo}{notaLado && <span className="font-normal text-indigo-500 text-[9px] ml-1">{notaLado}</span>}
+                        </span>
+                        {mostrarBotoes && (
+                          <div className="flex flex-wrap gap-1">
+                            {[
+                              ['bom',    'Melhor grupo',  'bg-emerald-500 hover:bg-emerald-600 text-white'],
+                              ['neutro', 'Bom / Mantido', 'bg-blue-500 hover:bg-blue-600 text-white'],
+                              ['pouco',  'Pouco efeito',  'bg-slate-400 hover:bg-slate-500 text-white'],
+                              ['ruim',   'Col. - Marcha', 'bg-rose-400 hover:bg-rose-500 text-white'],
+                              ['ruim',   'Col. - Fala',   'bg-rose-600 hover:bg-rose-700 text-white'],
+                              ['ruim',   'Col. - Outro',  'bg-rose-800 hover:bg-rose-900 text-white'],
+                            ].map(([efVal, label, cls]) => (
+                              <button key={label} onClick={() => handleEfeitoGrupo(grupo, efVal, label)}
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all shadow-sm ${cls}`}>
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
                       <pre className="text-[10px] font-mono text-slate-500 leading-relaxed whitespace-pre-wrap flex-1 pl-0 sm:pl-3 sm:border-l border-slate-200">
                         {linhasGrupo.join('\n')}
@@ -1472,40 +1576,51 @@ ${progTexto}Avaliação: ${textoEfeito}
           </div>
         </BlocoColapsavel>
 
-        {/* BLOCO: PRONTUÁRIO */}
+        {/* BLOCO: PRONTUÁRIO — compact evolution-first layout */}
         <BlocoColapsavel
-          titulo="Prontuário"
+          titulo="Evolução"
           aberto={blocosAbertos.prontuario}
           onToggle={() => toggleBloco('prontuario')}
         >
-          <div className="flex flex-wrap gap-3 mb-3">
-            <div className="flex-1 min-w-[200px]">
-              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Resumo da Sessão</label>
-              <input type="text" value={resumoSessao} onChange={e => setResumoSessao(e.target.value)}
-                placeholder="Resumo breve (aparece no histórico)"
-                className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700" />
-            </div>
-            <div className="w-40 shrink-0">
-              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Voltagem da Bateria</label>
+          {/* Header line: session title + battery */}
+          <div className="flex items-center gap-2 mb-2">
+            <input type="text" value={resumoSessao} onChange={e => setResumoSessao(e.target.value)}
+              placeholder={`Sessão de programação — ${new Date().toLocaleDateString('pt-BR')}`}
+              className="flex-1 px-3 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 font-medium" />
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="text-[10px] text-slate-400 font-bold">🔋</span>
               <input type="text" value={voltagemBateria} onChange={e => setVoltagemBateria(e.target.value)}
-                placeholder="Ex: 2.74 V"
-                className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono text-slate-700" />
+                placeholder="V"
+                className="w-20 px-2 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono text-slate-700 text-center" />
             </div>
           </div>
-          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Anotação da Consulta</label>
+          {/* Auto-expanding evolution textarea */}
           <textarea
             value={notasLivres}
             onChange={(e) => {
               setNotasLivres(e.target.value);
               e.target.style.height = 'auto';
-              e.target.style.height = e.target.scrollHeight + 'px';
+              e.target.style.height = Math.max(60, e.target.scrollHeight) + 'px';
             }}
-            onFocus={(e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }}
-            placeholder="Cole ou registre aqui a evolução do paciente. Não é necessário descrever a programação."
-            rows={6}
+            onFocus={(e) => { e.target.style.height = 'auto'; e.target.style.height = Math.max(60, e.target.scrollHeight) + 'px'; }}
+            placeholder="Cole ou registre aqui a evolução do paciente..."
+            rows={2}
+            style={{ minHeight: '60px', height: notasLivres ? 'auto' : '60px' }}
             className="w-full p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none text-slate-700 leading-relaxed overflow-hidden"
           />
-          <div className="flex justify-end mt-2">
+          <div className="flex items-center justify-between mt-2">
+            <div className="flex items-center gap-2">
+              <button onClick={() => setShowHistoricoText(true)}
+                className="flex items-center gap-1.5 text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg font-bold transition-all border border-slate-200"
+                title="Ver histórico completo de programação em texto">
+                📜 Histórico
+              </button>
+              <button onClick={() => setShowUPDRS(true)}
+                className="flex items-center gap-1.5 text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-3 py-1.5 rounded-lg font-bold transition-all border border-teal-200"
+                title="Abrir pontuação MDS-UPDRS Parte III">
+                📊 UPDRS-III
+              </button>
+            </div>
             <button onClick={copiarConsultaClipboard}
               className="flex items-center gap-1.5 text-xs bg-slate-700 hover:bg-slate-900 text-white px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm"
               title="Copia cabeçalho, evolução e programação atual para colar no prontuário">
@@ -1571,7 +1686,7 @@ ${progTexto}Avaliação: ${textoEfeito}
               <div className="flex items-center justify-between mb-2">
                 <div>
                   <p className="text-xs font-bold text-slate-700">Integração com Prontuário</p>
-                  <p className="text-[10px] text-slate-500">Cole um texto no formato DBS para importar a programação.</p>
+                  <p className="text-[10px] text-slate-500">Cole ou digite um texto no formato padronizado para tentar importar a programação e aplicar ao paciente atual.</p>
                 </div>
                 <button onClick={aplicarProntuario} className="text-xs bg-indigo-600 text-white hover:bg-indigo-700 px-4 py-2 rounded-lg font-bold transition-all shadow-sm">
                   Ler Texto e Aplicar
@@ -1713,6 +1828,123 @@ ${progTexto}Avaliação: ${textoEfeito}
           </div>
         );
       })()}
+
+      {/* MODAL: HISTÓRICO COMPLETO DE PROGRAMAÇÃO */}
+      {showHistoricoText && (() => {
+        const sessionsAtivas = sessions.filter(s => s.type === 'active')
+          .sort((a, b) => b.timestamp - a.timestamp);
+        const ordem = ORDEM_TEXTO_BAIXO_CIMA[tipoEletrodo];
+        const linhas = sessionsAtivas.map(sess => {
+          const data = formatarData(sess.timestamp);
+          const grupos = sess.dadosGrupos || {};
+          let txt = `${'─'.repeat(50)}\n📅 ${data}`;
+          if (sess.resumoSessao) txt += ` — ${sess.resumoSessao}`;
+          if (sess.voltagemBateria) txt += `  🔋 ${sess.voltagemBateria}V`;
+          txt += '\n';
+          ['A','B','C','D'].forEach(g => {
+            const grupo = grupos[g];
+            if (!grupo) return;
+            const hasData = ['L','R'].some(l => (grupo[l]||[]).length > 0);
+            if (!hasData) return;
+            txt += `Grupo ${g}:\n`;
+            ['L','R'].forEach(lado => {
+              const leadStr = lado === 'L' ? 'E' : 'D';
+              (grupo[lado] || []).forEach((prog, idx) => {
+                const progs = grupo[lado];
+                const leadName = progs.length > 1 ? `  Lead ${leadStr}${idx+1}` : `  Lead ${leadStr}`;
+                const ord = ORDEM_TEXTO_BAIXO_CIMA[sess.tipoEletrodo || '4-ring'];
+                const contactStr = ord.map(c => {
+                  const st = prog.contatos?.[c]?.state || 'off';
+                  if (st === 'off') return '0';
+                  const perc = prog.contatos[c]?.perc;
+                  return perc < 100 ? `${st}(${perc}%)` : st;
+                }).join('');
+                txt += `${leadName}: ${contactStr}  ${prog.amp?.toFixed(1)}mA  ${prog.pw}µs  ${prog.freq}Hz\n`;
+              });
+            });
+          });
+          if (sess.notasLivres) txt += `\nEvolução: ${sess.notasLivres.slice(0, 300)}${sess.notasLivres.length > 300 ? '...' : ''}\n`;
+          return txt;
+        }).join('\n');
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4"
+            onClick={() => setShowHistoricoText(false)}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden"
+              onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between px-5 py-3 border-b bg-slate-800 text-white rounded-t-2xl">
+                <div>
+                  <h2 className="font-bold text-sm">Histórico Completo de Programação</h2>
+                  <p className="text-[10px] text-slate-400">{activePatient?.nome} — {sessionsAtivas.length} sessão(ões), mais recente primeiro</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(linhas); }}
+                    className="text-[10px] font-bold bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded-lg transition-all">
+                    📋 Copiar
+                  </button>
+                  <button onClick={() => setShowHistoricoText(false)}
+                    className="text-white hover:text-slate-300 font-bold text-lg leading-none ml-2">×</button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+                {/* Battery chart */}
+                {(() => {
+                  const batData = sessionsAtivas
+                    .map(s => ({ ts: s.timestamp, v: parseFloat(String(s.voltagemBateria||'').replace(',','.')) }))
+                    .filter(d => !isNaN(d.v) && d.v > 0)
+                    .reverse(); // oldest first for chart
+                  if (batData.length < 2) return null;
+                  const W = 560, H = 80, pad = { l: 32, r: 10, t: 8, b: 20 };
+                  const iW = W - pad.l - pad.r, iH = H - pad.t - pad.b;
+                  const minV = Math.min(...batData.map(d => d.v)) - 0.1;
+                  const maxV = Math.max(...batData.map(d => d.v)) + 0.1;
+                  const minTs = batData[0].ts, maxTs = batData[batData.length-1].ts;
+                  const tsRange = maxTs - minTs || 1;
+                  const toX = ts => pad.l + ((ts - minTs) / tsRange) * iW;
+                  const toY = v => pad.t + iH - ((v - minV) / (maxV - minV)) * iH;
+                  const pts = batData.map(d => `${toX(d.ts)},${toY(d.v)}`).join(' ');
+                  return (
+                    <div>
+                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Bateria (V) ao longo do tempo</p>
+                      <svg width="100%" viewBox={`0 0 ${W} ${H}`} className="bg-white border border-slate-200 rounded-lg">
+                        {/* Y gridlines */}
+                        {[0,0.25,0.5,0.75,1].map(f => {
+                          const v = minV + f*(maxV-minV);
+                          const y = toY(v);
+                          return <g key={f}>
+                            <line x1={pad.l} y1={y} x2={W-pad.r} y2={y} stroke="#f1f5f9" strokeWidth={1}/>
+                            <text x={pad.l-3} y={y+3} textAnchor="end" fontSize={7} fill="#94a3b8">{v.toFixed(1)}</text>
+                          </g>;
+                        })}
+                        {/* Line */}
+                        <polyline points={pts} fill="none" stroke="#f59e0b" strokeWidth={2} strokeLinejoin="round"/>
+                        {/* Points */}
+                        {batData.map((d,i) => (
+                          <circle key={i} cx={toX(d.ts)} cy={toY(d.v)} r={3} fill="#f59e0b">
+                            <title>{new Date(d.ts).toLocaleDateString('pt-BR')} — {d.v}V</title>
+                          </circle>
+                        ))}
+                      </svg>
+                    </div>
+                  );
+                })()}
+                <pre className="text-[11px] font-mono text-slate-700 leading-relaxed whitespace-pre-wrap">{linhas}</pre>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* UPDRS MODAL */}
+      {showUPDRS && (
+        <UPDRSModal
+          onClose={() => setShowUPDRS(false)}
+          onInserir={(text) => {
+            setNotasLivres(prev => (prev ? prev + '\n\n' : '') + text);
+          }}
+        />
+      )}
 
       {/* EXTRATOR DE PRONTUÁRIOS */}
       {showExtrator && (

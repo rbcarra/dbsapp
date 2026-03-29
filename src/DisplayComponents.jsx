@@ -3,10 +3,27 @@ import { MARCADOR_LETRAS, opacidadeMarcador, formatarData } from './constants';
 import { DIR_ANGLES, parseConfigToContatos, classifyStim, getDirLevel,
   dirUnitVector2D, calcAmpEfetiva, dirVector3D } from './vectorHelpers';
 
-const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey, sessaoAtualTimestamp, programaContatos, ampAtual, labelGrupo, mostrarPositivos = true, mostrarNegativos = true, mostrarPrevios = true }) => {
+
+// Contact anterior angle lookup (degrees)
+const CONTACT_ANTERIOR_ANGLES = {
+  'A':  90,
+  'AB': 150,
+  'B':  210,
+  'BC': 270,
+  'C':  330,
+  'CA': 30,
+};
+
+const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey, sessaoAtualTimestamp, programaContatos, ampAtual, labelGrupo, mostrarPositivos = true, mostrarNegativos = true, mostrarPrevios = true, anteriorContact = 'A', onOpenFullscreen }) => {
   const [isZoomed, setIsZoomed] = React.useState(false);
   const S = isZoomed ? 300 : 160;
   const C = S / 2, margin = S * 0.14, R = C - margin;
+  const anteriorRad = (CONTACT_ANTERIOR_ANGLES[anteriorContact] ?? 90) * Math.PI / 180;
+  const xyTheta2D = -Math.PI / 2 - anteriorRad;
+  const rot2D = (ux, uy) => ({
+    rx: ux * Math.cos(xyTheta2D) - uy * Math.sin(xyTheta2D),
+    ry: ux * Math.sin(xyTheta2D) + uy * Math.cos(xyTheta2D),
+  });
   // Fix 2: maxAmp from actual displayed data
   const allAmps = [
     ampAtual || 0,
@@ -25,6 +42,11 @@ const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey
     <div className="flex flex-col items-center gap-0.5">
       {labelGrupo && <span className="text-[8px] text-slate-500 font-mono">{labelGrupo}</span>}
       <div className="relative cursor-pointer" onClick={() => setIsZoomed(!isZoomed)} title="Clique para ampliar">
+        {onOpenFullscreen && !isZoomed && (
+          <button onClick={e => { e.stopPropagation(); onOpenFullscreen(); }}
+            className="absolute top-0.5 right-0.5 z-10 w-4 h-4 rounded bg-slate-200/80 hover:bg-slate-300 text-slate-500 text-[8px] flex items-center justify-center"
+            title="Abrir em tela cheia">⛶</button>
+        )}
         <svg width={S} height={S} viewBox={`0 0 ${S} ${S}`}>
           <rect width={S} height={S} fill="#ffffff" rx="8"/>
           {rings.map(v => (
@@ -38,18 +60,23 @@ const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey
           ))}
           {Object.entries(DIR_ANGLES).map(([letter, deg]) => {
             const rad = deg * Math.PI / 180;
+            const {rx, ry} = rot2D(Math.cos(rad), Math.sin(rad));
             const labelR = toR(Math.ceil(maxAmp)) + S * 0.07;
+            const isAnterior = letter === anteriorContact || anteriorContact.includes(letter);
             return (
               <g key={letter}>
-                <line x1={C} y1={C} x2={C + Math.cos(rad)*toR(Math.ceil(maxAmp))} y2={C - Math.sin(rad)*toR(Math.ceil(maxAmp))} stroke="#94a3b8" strokeWidth={0.5}/>
-                <text x={C + Math.cos(rad)*labelR} y={C - Math.sin(rad)*labelR} textAnchor="middle" dominantBaseline="middle" fontSize={Math.max(9, S*0.06)} fontWeight="bold" fill="#1e293b">{letter}</text>
+                <line x1={C} y1={C} x2={C + rx*toR(Math.ceil(maxAmp))} y2={C - ry*toR(Math.ceil(maxAmp))} stroke={isAnterior ? '#64748b' : '#cbd5e1'} strokeWidth={isAnterior ? 1 : 0.5}/>
+                <text x={C + rx*labelR} y={C - ry*labelR} textAnchor="middle" dominantBaseline="middle" fontSize={Math.max(9, S*0.06)} fontWeight="bold" fill="#1e293b">{letter}</text>
               </g>
             );
           })}
-          {currentVec && currentAmpEf > 0 && (
-            <line x1={C} y1={C} x2={C + currentVec.ux*toR(currentAmpEf)} y2={C - currentVec.uy*toR(currentAmpEf)}
-              stroke="#6366f1" strokeWidth={2} strokeDasharray="4,3" opacity={0.5}/>
-          )}
+          {/* Anterior indicator at bottom */}
+          <text x={C} y={C + toR(Math.ceil(maxAmp)) + S*0.09} textAnchor="middle" fontSize={Math.max(6, S*0.04)} fill="#64748b" fontStyle="italic">↓ {anteriorContact}</text>
+          {currentVec && currentAmpEf > 0 && (() => {
+            const {rx, ry} = rot2D(currentVec.ux, currentVec.uy);
+            return <line x1={C} y1={C} x2={C + rx*toR(currentAmpEf)} y2={C - ry*toR(currentAmpEf)}
+              stroke="#6366f1" strokeWidth={2} strokeDasharray="4,3" opacity={0.5}/>;
+          })()}
           <circle cx={C} cy={C} r={Math.max(2, S*0.015)} fill="#334155"/>
 
           {/* Indicadores de programação prévia — bolinhas coloridas por efeito */}
@@ -87,7 +114,8 @@ const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey
             return true;
           }).map((m, mi) => {
             const contatos = m._contatos || parseConfigToContatos(m.config);
-            const { ux, uy } = dirUnitVector2D(contatos);
+            const { ux: ux0, uy: uy0 } = dirUnitVector2D(contatos);
+            const { rx: ux, ry: uy } = rot2D(ux0, uy0);
             const ampEf = calcAmpEfetiva(contatos, m.amp || 0);
             const r = toR(ampEf);
             const px = C + ux * r, py = C - uy * r;
@@ -111,7 +139,7 @@ const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey
   );
 };
 
-const DirectionalHistorico = ({ marcadores, historicoRef, maxAmp, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq }) => {
+const DirectionalHistorico = ({ marcadores, historicoRef, maxAmp, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq, anteriorContact = 'A', onOpenFullscreen }) => {
   const [mostrarPositivos, setMostrarPositivos] = React.useState(true);
   const [mostrarNegativos, setMostrarNegativos] = React.useState(true);
   const [mostrarPrevios, setMostrarPrevios] = React.useState(true);
@@ -163,6 +191,8 @@ const DirectionalHistorico = ({ marcadores, historicoRef, maxAmp, sessaoAtualTim
               mostrarPositivos={mostrarPositivos}
               mostrarNegativos={mostrarNegativos}
               mostrarPrevios={mostrarPrevios}
+              anteriorContact={anteriorContact}
+              onOpenFullscreen={onOpenFullscreen ? () => onOpenFullscreen(k) : undefined}
             />
           ))}
         </div>
@@ -171,7 +201,7 @@ const DirectionalHistorico = ({ marcadores, historicoRef, maxAmp, sessaoAtualTim
   );
 };
 
-const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq, marcadoresRing }) => {
+const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq, marcadoresRing, anteriorContact = 'A', onOpenFullscreen }) => {
   const [isZoomed, setIsZoomed] = React.useState(false);
   const [mostrarRing, setMostrarRing] = React.useState(true);
   const [mostrarSingleDir, setMostrarSingleDir] = React.useState(true);
@@ -179,6 +209,7 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
   const [mostrarNegativos, setMostrarNegativos] = React.useState(true);
   const [mostrarPrevios, setMostrarPrevios] = React.useState(true);
   const [apenasSimilar, setApenasSimilar] = React.useState(false);
+  const anteriorAngle = CONTACT_ANTERIOR_ANGLES[anteriorContact] ?? 90;
   const S = isZoomed ? 240 : 140;
   const C = S / 2, margin = S * 0.12, R = C - margin;
 
@@ -296,13 +327,62 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
     );
   };
 
+  // Rotation from contact-anterior selection
+  const anteriorRad = anteriorAngle * Math.PI / 180;
+  // θ for XY: rotate so anterior points to SVG bottom (= math -Y direction)
+  const xyTheta = -Math.PI / 2 - anteriorRad;
+  const rotXY = (ux, uy) => ({
+    rx: ux * Math.cos(xyTheta) - uy * Math.sin(xyTheta),
+    ry: ux * Math.sin(xyTheta) + uy * Math.cos(xyTheta),
+  });
+
+  // XZ frente: looking from anterior direction → horizontal = lateral to AP
+  // px = component perpendicular to anterior (lateral), py = Z
+  const getXZ = (v) => ({
+    px: -v.ux * Math.sin(anteriorRad) + v.uy * Math.cos(anteriorRad),
+    py: v.uz,
+  });
+  // YZ lado: anterior=right, posterior=left → px = AP component, py = Z
+  const getYZ = (v) => ({
+    px: v.ux * Math.cos(anteriorRad) + v.uy * Math.sin(anteriorRad),
+    py: v.uz,
+  });
+
+  // Per-contact label positions using rotation
+  const xzDirLabels = Object.entries(DIR_ANGLES).map(([lt, deg]) => {
+    const r = deg * Math.PI / 180;
+    // lateral component of this contact direction relative to AP axis
+    const lx = -Math.cos(r) * Math.sin(anteriorRad) + Math.sin(r) * Math.cos(anteriorRad);
+    return { letter: lt, lx, ly: 0 };
+  });
+  const yzDirLabels = Object.entries(DIR_ANGLES).map(([lt, deg]) => {
+    const r = deg * Math.PI / 180;
+    // AP component of this contact
+    const lx = Math.cos(r) * Math.cos(anteriorRad) + Math.sin(r) * Math.sin(anteriorRad);
+    return { letter: lt, lx, ly: 0 };
+  });
+
+  const anteriorLabel = anteriorContact;
+  const posteriorLabel = { 'A':'B/C','AB':'BC','B':'C/A','BC':'CA','C':'A/B','CA':'AB' }[anteriorContact] || 'Post';
+
   const projections = [
-    { label: 'XY · topo', showSchematic: false, getXY: v => ({ px: v.ux, py: v.uy }),
-      dirLabels: Object.entries(DIR_ANGLES).map(([lt, deg]) => ({ letter: lt, lx: Math.cos(deg * Math.PI / 180), ly: Math.sin(deg * Math.PI / 180) })) },
-    { label: 'XZ · frente', showSchematic: true, getXY: v => ({ px: v.ux, py: v.uz }),
-      dirLabels: [{ letter: 'A', lx: 1, ly: 0 }, { letter: 'B/C', lx: -0.5, ly: 0 }] },
-    { label: 'YZ · lado', showSchematic: true, getXY: v => ({ px: v.uy, py: v.uz }),
-      dirLabels: [{ letter: 'B', lx: -1, ly: 0 }, { letter: 'C', lx: 0.87, ly: 0 }] },
+    { label: 'XY · axial', showSchematic: false,
+      getXY: v => { const {rx,ry} = rotXY(v.ux, v.uy); return { px: rx, py: ry }; },
+      dirLabels: Object.entries(DIR_ANGLES).map(([lt, deg]) => {
+        const r = deg * Math.PI / 180;
+        const {rx,ry} = rotXY(Math.cos(r), Math.sin(r));
+        return { letter: lt, lx: rx, ly: ry };
+      }),
+      bottomLabel: anteriorLabel,
+    },
+    { label: `XZ · frente (→${anteriorLabel})`, showSchematic: true, getXY: getXZ,
+      dirLabels: xzDirLabels,
+      extraLabels: [{ letter: anteriorLabel, lx: 0.95, ly: 0, color: '#64748b', size: 0.04 },
+                    { letter: posteriorLabel, lx: -0.85, ly: 0, color: '#94a3b8', size: 0.035 }],
+    },
+    { label: `YZ · lado (Post←→${anteriorLabel})`, showSchematic: true, getXY: getYZ,
+      dirLabels: yzDirLabels,
+    },
   ];
 
   // Helper: for each marker/item, compute its own Z-origin in SVG coords for XZ/YZ views
@@ -479,6 +559,9 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
           <button onClick={() => setIsZoomed(!isZoomed)} className="text-[8px] text-slate-500 hover:text-slate-700 font-bold px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200">
             {isZoomed ? '−' : '+'}
           </button>
+          {onOpenFullscreen && (
+            <button onClick={onOpenFullscreen} className="text-[8px] text-slate-500 hover:text-slate-700 font-bold px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200" title="Tela cheia">⛶</button>
+          )}
         </div>
       </div>
       {allKeys.length === 0 ? (
@@ -702,6 +785,8 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
 const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, isAmplitude, historicoRef, marcadores, marcadoresRing, sessaoAtualTimestamp, tipoEletrodo, programaContatos }) => {
   const [agruparPorFreq, setAgruparPorFreq] = React.useState(false);
   const [forcarMultiDir, setForcarMultiDir] = React.useState(false);
+  const [anteriorContact, setAnteriorContact] = React.useState('A');
+  const [fullscreenDisplay, setFullscreenDisplay] = React.useState(null); // {tipo, grpKey}
 
   return (
   <div className="flex flex-col mb-3">
@@ -724,17 +809,43 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, is
             title="Forçar visão 3D multi-dir">
             3D
           </button>
+          {tipoEletrodo === 'directional' && (
+            <div className="flex items-center gap-1">
+              <span className="text-[7px] text-slate-400 uppercase font-bold">Ant.:</span>
+              <select value={anteriorContact} onChange={e => setAnteriorContact(e.target.value)}
+                className="text-[8px] font-bold bg-slate-100 border border-slate-200 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-slate-400 cursor-pointer">
+                {['A','AB','B','BC','C','CA'].map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+          )}
         </div>
       );
 
       if (stimType === 'single-dir') {
-        return <>{toggleBar}<DirectionalHistorico marcadores={marcadores} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq}/></>;
+        return <>{toggleBar}<DirectionalHistorico marcadores={marcadores} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} onOpenFullscreen={(grpKey) => setFullscreenDisplay({tipo:'single', grpKey})}/></>;
       } else if (stimType === 'multi-dir') {
-        return <>{toggleBar}<TripleView3D marcadores={marcadores} marcadoresRing={marcadoresRing} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq}/></>;
+        return <>{toggleBar}<TripleView3D marcadores={marcadores} marcadoresRing={marcadoresRing} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} onOpenFullscreen={() => setFullscreenDisplay({tipo:'multi'})}/></>;
       } else {
         return <>{toggleBar}<TimelineHistorico historicoRef={historicoRef} maxAmp={max} marcadores={marcadores} sessaoAtualTimestamp={sessaoAtualTimestamp} agruparPorFreq={agruparPorFreq}/></>;
       }
     })()}
+    {/* Fullscreen modal for polar display */}
+    {fullscreenDisplay && (
+      <div className="fixed inset-0 z-[70] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4"
+        onClick={() => setFullscreenDisplay(null)}>
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[95vh] overflow-auto p-6 flex flex-col gap-4"
+          onClick={e => e.stopPropagation()}>
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-bold text-slate-700">Visualização ampliada — {label}</h3>
+            <button onClick={() => setFullscreenDisplay(null)} className="text-slate-400 hover:text-slate-700 text-2xl font-bold leading-none">×</button>
+          </div>
+          {fullscreenDisplay.tipo === 'single'
+            ? <DirectionalHistorico marcadores={marcadores} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact}/>
+            : <TripleView3D marcadores={marcadores} marcadoresRing={marcadoresRing} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact}/>
+          }
+        </div>
+      </div>
+    )}
     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1 mt-1">{label}</label>
     <div className="flex items-center gap-1.5">
       <button onClick={() => onChange(Math.max(min, Number((valor - step).toFixed(2))))} className="w-6 h-6 rounded bg-slate-200 hover:bg-slate-300 font-bold text-sm flex-shrink-0 flex items-center justify-center">-</button>
