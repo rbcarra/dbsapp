@@ -442,7 +442,7 @@ const TIPOS_ELETRODO_EXTRATOR = ['4-ring', '8-ring', 'directional'];
 const FIELDS = ['date','evolution','programming'];
 const FIELDS_OPTIONAL = ['thresholdL', 'thresholdR'];
 const FIELD_INFO = {
-  date:        { label:'DATA DA CONSULTA',  icon:'📅', hint:'Selecione a data no texto', color:'amber'   },
+  date:        { label:'DATA DA CONSULTA',  icon:'📅', hint:'Selecione a data no texto — deixe sem preenchimento para estimar automaticamente', color:'amber'   },
   evolution:   { label:'EVOLUÇÃO CLÍNICA',  icon:'📋', hint:'Selecione o parágrafo de evolução', color:'sky' },
   programming: { label:'PROGRAMAÇÃO ATUAL', icon:'⚡', hint:'Selecione o trecho Lead E/D… mA… Hz', color:'emerald' },
   thresholdL:  { label:'LIMIARES – HEMISFÉRIO ESQ', icon:'🧪', hint:'Selecione o trecho de teste de contato E', color:'violet' },
@@ -787,7 +787,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
         else if (nextTs) estTs = nextTs - 6*30*24*60*60*1000; // 6 months before next
         else if (prevTs) estTs = prevTs + 6*30*24*60*60*1000; // 6 months after prev
         else return r;
-        return { ...r, date: toDateStr(estTs) + ' (estimado)' };
+        return { ...r, date: toDateStr(estTs) };
       });
       setReviewed(filledRows); setPhase('review');
     }
@@ -982,7 +982,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                       value={val||''}
                       onChange={e=>setCaptured(prev=>({...prev,[consultIdx]:{...(prev[consultIdx]||{}),date:e.target.value}}))}
                       className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-[11px] font-mono text-white focus:outline-none focus:ring-1 focus:ring-amber-400"
-                      placeholder="dd/mm/aaaa"
+                      placeholder="dd/mm/aaaa — deixe vazio para estimar automaticamente"
                     />
                   </div>
                 );

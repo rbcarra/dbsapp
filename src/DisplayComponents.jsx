@@ -14,9 +14,9 @@ const CONTACT_ANTERIOR_ANGLES = {
   'CA': 30,
 };
 
-const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey, sessaoAtualTimestamp, programaContatos, ampAtual, labelGrupo, mostrarPositivos = true, mostrarNegativos = true, mostrarPrevios = true, anteriorContact = 'A', onOpenFullscreen }) => {
+const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey, sessaoAtualTimestamp, programaContatos, ampAtual, labelGrupo, mostrarPositivos = true, mostrarNegativos = true, mostrarPrevios = true, anteriorContact = 'A', onOpenFullscreen, forcedSize }) => {
   const [isZoomed, setIsZoomed] = React.useState(false);
-  const S = isZoomed ? 300 : 160;
+  const S = forcedSize ?? (isZoomed ? 300 : 160);
   const C = S / 2, margin = S * 0.14, R = C - margin;
   const anteriorRad = (CONTACT_ANTERIOR_ANGLES[anteriorContact] ?? 90) * Math.PI / 180;
   const xyTheta2D = -Math.PI / 2 - anteriorRad;
@@ -139,7 +139,7 @@ const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey
   );
 };
 
-const DirectionalHistorico = ({ marcadores, historicoRef, maxAmp, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq, anteriorContact = 'A', onOpenFullscreen }) => {
+const DirectionalHistorico = ({ marcadores, historicoRef, maxAmp, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq, anteriorContact = 'A', onOpenFullscreen, forcedSize }) => {
   const [mostrarPositivos, setMostrarPositivos] = React.useState(true);
   const [mostrarNegativos, setMostrarNegativos] = React.useState(true);
   const [mostrarPrevios, setMostrarPrevios] = React.useState(true);
@@ -193,6 +193,7 @@ const DirectionalHistorico = ({ marcadores, historicoRef, maxAmp, sessaoAtualTim
               mostrarPrevios={mostrarPrevios}
               anteriorContact={anteriorContact}
               onOpenFullscreen={onOpenFullscreen ? () => onOpenFullscreen(k) : undefined}
+              forcedSize={forcedSize}
             />
           ))}
         </div>
@@ -201,7 +202,7 @@ const DirectionalHistorico = ({ marcadores, historicoRef, maxAmp, sessaoAtualTim
   );
 };
 
-const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq, marcadoresRing, anteriorContact = 'A', onOpenFullscreen }) => {
+const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq, marcadoresRing, anteriorContact = 'A', onOpenFullscreen, forcedSize }) => {
   const [isZoomed, setIsZoomed] = React.useState(false);
   const [mostrarRing, setMostrarRing] = React.useState(true);
   const [mostrarSingleDir, setMostrarSingleDir] = React.useState(true);
@@ -210,7 +211,7 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
   const [mostrarPrevios, setMostrarPrevios] = React.useState(true);
   const [apenasSimilar, setApenasSimilar] = React.useState(false);
   const anteriorAngle = CONTACT_ANTERIOR_ANGLES[anteriorContact] ?? 90;
-  const S = isZoomed ? 240 : 140;
+  const S = forcedSize ?? (isZoomed ? 240 : 140);
   const C = S / 2, margin = S * 0.12, R = C - margin;
 
   // Fix 2: maxAmp from actual data, not slider max
@@ -833,15 +834,15 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, is
     {fullscreenDisplay && (
       <div className="fixed inset-0 z-[70] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4"
         onClick={() => setFullscreenDisplay(null)}>
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[95vh] overflow-auto p-6 flex flex-col gap-4"
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[95vh] overflow-auto p-6 flex flex-col gap-4"
           onClick={e => e.stopPropagation()}>
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-bold text-slate-700">Visualização ampliada — {label}</h3>
             <button onClick={() => setFullscreenDisplay(null)} className="text-slate-400 hover:text-slate-700 text-2xl font-bold leading-none">×</button>
           </div>
           {fullscreenDisplay.tipo === 'single'
-            ? <DirectionalHistorico marcadores={marcadores} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact}/>
-            : <TripleView3D marcadores={marcadores} marcadoresRing={marcadoresRing} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact}/>
+            ? <DirectionalHistorico marcadores={marcadores} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} forcedSize={520}/>
+            : <TripleView3D marcadores={marcadores} marcadoresRing={marcadoresRing} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} forcedSize={460}/>
           }
         </div>
       </div>

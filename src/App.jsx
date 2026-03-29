@@ -14,7 +14,7 @@ import { UPDRSModal } from './UPDRSComponents';
 
 import { auth, db, appId } from './firebase';
 
-// Feito por Rafael Carra ao longo de muitos plantões do HC. 
+
 
 
 // --- APLICATIVO PRINCIPAL ---
@@ -938,7 +938,10 @@ export default function App() {
     // Salvar efeito em ambos os lados na última sessão
     const novosDadosGrupos = JSON.parse(JSON.stringify(ultima.dadosGrupos));
     ['L','R'].forEach(lado => {
-      (novosDadosGrupos[grupo]?.[lado] || []).forEach(prog => { prog.efeito = efeito; });
+      (novosDadosGrupos[grupo]?.[lado] || []).forEach(prog => {
+        prog.efeito = efeito;
+        prog.efeitoTexto = textoEfeito; // save full label e.g. "Col. - Marcha"
+      });
     });
     try {
       await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'sessions', ultima.id), {
@@ -1585,7 +1588,7 @@ ${progTexto}Avaliação: ${textoEfeito}
           {/* Header line: session title + battery */}
           <div className="flex items-center gap-2 mb-2">
             <input type="text" value={resumoSessao} onChange={e => setResumoSessao(e.target.value)}
-              placeholder={`Sessão de programação — ${new Date().toLocaleDateString('pt-BR')}`}
+              placeholder={`Resumo: Digite aqui em poucas palavras a impressão geral ou ocorrência mais importante dessa consulta`}
               className="flex-1 px-3 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 font-medium" />
             <div className="flex items-center gap-1.5 shrink-0">
               <span className="text-[10px] text-slate-400 font-bold">🔋</span>
@@ -1686,7 +1689,7 @@ ${progTexto}Avaliação: ${textoEfeito}
               <div className="flex items-center justify-between mb-2">
                 <div>
                   <p className="text-xs font-bold text-slate-700">Integração com Prontuário</p>
-                  <p className="text-[10px] text-slate-500">Cole ou digite um texto no formato padronizado para tentar importar a programação e aplicar ao paciente atual.</p>
+                  <p className="text-[10px] text-slate-500">Cole um texto no formato DBS para importar a programação.</p>
                 </div>
                 <button onClick={aplicarProntuario} className="text-xs bg-indigo-600 text-white hover:bg-indigo-700 px-4 py-2 rounded-lg font-bold transition-all shadow-sm">
                   Ler Texto e Aplicar
@@ -1837,22 +1840,34 @@ ${progTexto}Avaliação: ${textoEfeito}
         const linhas = sessionsAtivas.map(sess => {
           const data = formatarData(sess.timestamp);
           const grupos = sess.dadosGrupos || {};
+          const ord = ORDEM_TEXTO_BAIXO_CIMA[sess.tipoEletrodo || '4-ring'];
+
+          // Header line: date + resumo
           let txt = `${'─'.repeat(50)}\n📅 ${data}`;
           if (sess.resumoSessao) txt += ` — ${sess.resumoSessao}`;
-          if (sess.voltagemBateria) txt += `  🔋 ${sess.voltagemBateria}V`;
           txt += '\n';
+
+          // Groups with programming + efeito annotation
           ['A','B','C','D'].forEach(g => {
             const grupo = grupos[g];
             if (!grupo) return;
             const hasData = ['L','R'].some(l => (grupo[l]||[]).length > 0);
             if (!hasData) return;
-            txt += `Grupo ${g}:\n`;
+            // Get efeito from prog.efeito (stored per-prog) or session-level efeitosGrupos
+            const progL0 = (grupo['L'] || [])[0];
+            const efeito = progL0?.efeito || sess.efeitosGrupos?.[g];
+            const efeitoTexto = progL0?.efeitoTexto;
+            const efeitoLabel = efeito && efeito !== 'neutro'
+              ? ` [${efeito === 'bom' ? '★ melhor'
+                  : efeito === 'pouco' ? '△ pouco'
+                  : efeitoTexto ? `✗ ${efeitoTexto}` : '✗ ruim'}]`
+              : '';
+            txt += `Grupo ${g}${efeitoLabel}:\n`;
             ['L','R'].forEach(lado => {
               const leadStr = lado === 'L' ? 'E' : 'D';
               (grupo[lado] || []).forEach((prog, idx) => {
                 const progs = grupo[lado];
                 const leadName = progs.length > 1 ? `  Lead ${leadStr}${idx+1}` : `  Lead ${leadStr}`;
-                const ord = ORDEM_TEXTO_BAIXO_CIMA[sess.tipoEletrodo || '4-ring'];
                 const contactStr = ord.map(c => {
                   const st = prog.contatos?.[c]?.state || 'off';
                   if (st === 'off') return '0';
@@ -1863,7 +1878,14 @@ ${progTexto}Avaliação: ${textoEfeito}
               });
             });
           });
-          if (sess.notasLivres) txt += `\nEvolução: ${sess.notasLivres.slice(0, 300)}${sess.notasLivres.length > 300 ? '...' : ''}\n`;
+
+          // Battery and impedance
+          const extras = [];
+          if (sess.voltagemBateria) extras.push(`🔋 ${sess.voltagemBateria}V`);
+          if (sess.impedanciaL)     extras.push(`Imp E: ${sess.impedanciaL}Ω`);
+          if (sess.impedanciaR)     extras.push(`Imp D: ${sess.impedanciaR}Ω`);
+          if (extras.length) txt += extras.join('  ') + '\n';
+
           return txt;
         }).join('\n');
 

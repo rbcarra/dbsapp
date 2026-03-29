@@ -33,6 +33,10 @@ const classifyStim = (contatos, tipoEletrodo) => {
     const allThree = ['A','B','C'].map(x => contatos[lv + x]);
     const allActive = allThree.every(c => c && c.state !== 'off');
     if (allActive) {
+      // Fix: mixed polarity (catodo + anodo on same level) = single-dir, not ring
+      const states = allThree.map(c => c.state);
+      const hasMixedPolarity = states.some(s => s === '+') && states.some(s => s === '-');
+      if (hasMixedPolarity) return 'single-dir';
       const percs = allThree.map(c => c.perc ?? 100);
       const allSame = percs.every(p => p === percs[0]);
       if (allSame) return 'ring';

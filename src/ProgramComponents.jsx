@@ -93,14 +93,17 @@ const VisualizadorEletrodo = ({ lado, tipoEletrodo, contatos, onChangeState, onC
                           onPointerDown={(e) => e.stopPropagation()}
                         >
                           <label className="text-[10px] font-bold text-slate-500 uppercase mb-2 block">Corrente {label}</label>
-                          <input 
-                            type="range" min="0" max="100" step="5"
-                            value={contato.perc}
-                            onChange={(e) => onChangePerc(chave, parseInt(e.target.value))}
-                            className="w-full accent-indigo-600 mb-2 cursor-pointer"
-                          />
-                          <div className="flex justify-between items-center">
-                            <span className="text-xs font-bold text-indigo-700">{contato.perc}%</span>
+                          <div className="flex items-center gap-2 mb-2">
+                            <input
+                              type="number" min="0" max="100" step="5"
+                              value={contato.perc}
+                              onChange={(e) => onChangePerc(chave, Math.min(100, Math.max(0, parseInt(e.target.value) || 0)))}
+                              className="w-16 text-center font-bold text-sm text-indigo-700 bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-indigo-400 px-1 py-0.5"
+                              autoFocus
+                            />
+                            <span className="text-xs font-bold text-slate-500">%</span>
+                          </div>
+                          <div className="flex justify-end">
                             <button onClick={() => setEditandoMICC(null)} className="text-[10px] bg-slate-100 px-3 py-1 rounded font-bold hover:bg-slate-200">OK</button>
                           </div>
                         </div>
