@@ -284,6 +284,7 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
   const isSimilar = (config) => {
     if (!apenasSimilar || currentLevel.length === 0) return true;
     const levels = [...new Set(Object.keys(parseConfigToContatos(config)).filter(k => /[ABC]$/.test(k)).map(k => k[0]))];
+    if (levels.length === 0) return true; // ring config: always show (no directional levels to filter by)
     return levels.some(l => currentLevel.includes(l));
   };
 

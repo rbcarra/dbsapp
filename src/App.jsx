@@ -71,14 +71,17 @@ export default function App() {
   // Helper: cap programs to max 2 per side in any dadosGrupos object
   const capPrograms = (grupos) => {
     if (!grupos) return grupos;
-    const safe = JSON.parse(JSON.stringify(grupos));
-    Object.values(safe).forEach(grupo => {
-      ['L','R'].forEach(lado => {
-        if (Array.isArray(grupo[lado]) && grupo[lado].length > 2)
-          grupo[lado] = grupo[lado].slice(0, 2);
+    try {
+      const safe = JSON.parse(JSON.stringify(grupos));
+      Object.values(safe).forEach(grupo => {
+        if (!grupo || typeof grupo !== 'object') return; // guard null/non-object
+        ['L','R'].forEach(lado => {
+          if (!Array.isArray(grupo[lado])) { grupo[lado] = []; return; }
+          if (grupo[lado].length > 2) grupo[lado] = grupo[lado].slice(0, 2);
+        });
       });
-    });
-    return safe;
+      return safe;
+    } catch(e) { console.error('capPrograms error:', e); return grupos; }
   };
 
 
@@ -182,17 +185,7 @@ export default function App() {
           const d = tempDoc.data();
           if (d.tipoEletrodo) setTipoEletrodo(d.tipoEletrodo);
           if (d.dadosGrupos) {
-            // Defensive: cap programs to max 2 per side to prevent render crashes
-            const safeGrupos = JSON.parse(JSON.stringify(d.dadosGrupos));
-            Object.values(safeGrupos).forEach(grupo => {
-              ['L', 'R'].forEach(lado => {
-                if (Array.isArray(grupo[lado]) && grupo[lado].length > 2) {
-                  console.warn(`Session has ${grupo[lado].length} programs for ${lado}, capping to 2`);
-                  grupo[lado] = grupo[lado].slice(0, 2);
-                }
-              });
-            });
-            setDadosGrupos(safeGrupos);
+            setDadosGrupos(capPrograms(d.dadosGrupos) || d.dadosGrupos);
           }
           if (d.clinica) setClinica(d.clinica);
           if (d.efeitosColaterais) setEfeitosColaterais(d.efeitosColaterais);
@@ -729,6 +722,41 @@ export default function App() {
     }
   };
 
+  // Helper: convert extractor's parsed dadosGrupos (contatos as string "–-0+")
+  // to the app's format (contatos as object {0:{state:'-',perc:100},...})
+  const convertParsedGrupos = (parsed, tipoEl) => {
+    const tipo = tipoEl || '4-ring';
+    const result = {};
+    Object.entries(parsed || {}).forEach(([g, grupo]) => {
+      result[g] = {};
+      ['L', 'R'].forEach(lado => {
+        result[g][lado] = (grupo[lado] || []).map(prog => {
+          // Already converted (object format)?
+          if (prog.contatos && typeof prog.contatos === 'object' && !Array.isArray(prog.contatos)) {
+            return prog;
+          }
+          // Convert string "–-0+" to contact object
+          const contatosStr = prog.contatos || '';
+          const ordem = ORDEM_TEXTO_BAIXO_CIMA[tipo];
+          const novosContatos = getContatosIniciais(tipo);
+          // Strip spaces between symbols: "+0 - -" → "+0--"
+          const clean = contatosStr.replace(/([0+\-])\s+(?=[0+\-])/g, '$1');
+          const chars = [...clean]; // each char is a contact symbol
+          if (chars.length === ordem.length) {
+            chars.forEach((ch, i) => {
+              if (ch === '-' || ch === '+') {
+                novosContatos[ordem[i]] = { state: ch, perc: 100 };
+              }
+              // '0' stays as 'off'
+            });
+          }
+          return { ...prog, contatos: novosContatos };
+        });
+      });
+    });
+    return capPrograms(result);
+  };
+
   const handleSalvarSessao = async (modoAtualizar = false) => {
     if (!user || !activePatient) return;
     
@@ -803,7 +831,8 @@ export default function App() {
 
   const loadSession = (sess) => {
     setTipoEletrodo(sess.tipoEletrodo || '4-ring');
-    setDadosGrupos(capPrograms(sess.dadosGrupos));
+    try { setDadosGrupos(capPrograms(sess.dadosGrupos) || sess.dadosGrupos); }
+    catch(e) { console.error('Erro ao carregar grupos:', e); showToast('Erro ao carregar programação da sessão'); }
     setClinica(sess.clinica || { tremor: 0, rigidez: 0, bradicinesia: 0 });
     setEfeitosColaterais(sess.efeitosColaterais || { L: [], R: [] });
     setNotasLivres(sess.notasLivres || "");
@@ -824,7 +853,8 @@ export default function App() {
     const ultimaAtiva = sessions.find(s => s.type === 'active');
     if (ultimaAtiva) {
       setTipoEletrodo(ultimaAtiva.tipoEletrodo || '4-ring');
-      setDadosGrupos(capPrograms(ultimaAtiva.dadosGrupos));
+      try { setDadosGrupos(capPrograms(ultimaAtiva.dadosGrupos) || ultimaAtiva.dadosGrupos); }
+      catch(e) { console.error('Erro ao carregar ultima sessao:', e); }
       setClinica(ultimaAtiva.clinica || { tremor: 0, rigidez: 0, bradicinesia: 0 });
       setEfeitosColaterais(ultimaAtiva.efeitosColaterais || { L: [], R: [] });
       setNotasLivres(ultimaAtiva.notasLivres || "");
@@ -854,7 +884,7 @@ export default function App() {
     setGrupoAtivo(alvo); 
   };
 
-  const showToast = (msg) => {
+  const showToast = (msg, tipo = 'info') => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(""), 3000);
   };
@@ -2001,6 +2031,7 @@ ${progTexto}Avaliação: ${textoEfeito}
             let importadas = 0;
             for (const row of reviewed) {
               if (!row.parsed || Object.keys(row.parsed).length === 0) continue;
+              try {
               // Converter data dd/mm/yyyy para timestamp
               let ts = Date.now();
               if (row.date) {
@@ -2016,7 +2047,7 @@ ${progTexto}Avaliação: ${textoEfeito}
                 {
                   patientId: paciente.id,
                   timestamp: ts,
-                  dadosGrupos: row.parsed,
+                  dadosGrupos: convertParsedGrupos(row.parsed, row.tipoEletrodo),
                   tipoEletrodo: row.tipoEletrodo || '4-ring',
                   resumoSessao: row.evolution || '',
                   notasLivres: '',
@@ -2031,7 +2062,11 @@ ${progTexto}Avaliação: ${textoEfeito}
                   efeitosColaterais: { L: [], R: [] },
                 }
               );
-              importadas++;
+                importadas++;
+              } catch(rowErr) {
+                console.error('Erro ao importar sessão:', row.date, rowErr);
+                showToast(`⚠ Erro ao importar sessão ${row.date || '?'}: ${rowErr.message}`);
+              }
             }
             setShowExtrator(false);
             alert(`✓ ${importadas} sessão(ões) importadas para ${nome} (HC ${hc})`);

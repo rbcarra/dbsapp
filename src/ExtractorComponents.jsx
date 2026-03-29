@@ -51,8 +51,8 @@ const parseSide = (s) =>
 // Correção 2: fallback sem unidade — menor entre 40-180 = pw, maior = freq
 const parseParams = (seg) => {
   const amp  = getParam(seg, ['m[aA]', '[Vv](?![Hh][Zz])(?![a-zA-Z])']) ?? 0;
-  const pw   = getParam(seg, ['\\bpw\\b', '(?<![a-zA-Z])ms\\b', '[\\xb5u\\u03bc]s', '\\bμs\\b']);
-  const freq = getParam(seg, ['[Hh][Zz]\\b', '\\bfreq(?:u[eê]ncia)?\\b', '\\bfr\\b']);
+  const pw   = getParam(seg, ['pw(?![a-zA-Z])', '(?<![a-zA-Z])μs', '(?<![a-zA-Z])us(?![a-zA-Z])', 'µs', '(?<![a-zA-Z])ms(?![a-zA-Z])']);
+  const freq = getParam(seg, ['[Hh]z(?![a-zA-Z])', '\\bfreq(?:u[eê]ncia)?\\b', '\\bfr\\b']);
 
   let resolvedPw = pw ?? 60;
   let resolvedFreq = freq ?? 130;
