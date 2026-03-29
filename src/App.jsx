@@ -15,7 +15,7 @@ import { UPDRSModal } from './UPDRSComponents';
 import { auth, db, appId } from './firebase';
 
 
-
+// Feito Por Rafael Carra ao longo de muitos platões
 
 // --- APLICATIVO PRINCIPAL ---
 
@@ -981,9 +981,8 @@ export default function App() {
 
     // Acrescentar texto na anotação
     const linhaTexto = `
---- Programação da última sessão ---
-Grupo ${grupo}:
-${progTexto}Avaliação: ${textoEfeito}
+--- Última programação do Grupo ${grupo}. Avaliação: ${textoEfeito}.
+${progTexto}
 `;
     setNotasLivres(prev => (prev || '') + linhaTexto);
     showToast(`Efeito do Grupo ${grupo} salvo: ${textoEfeito}`);
