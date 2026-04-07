@@ -901,12 +901,12 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
     } else {
       const rows = consultations.map((_,i) => {
         const d = captured[i] || {};
+        const tipoEl = d.tipoEletrodo || tipoEletrodoGlobal;
         const parsed = parseProgramming(d.programming || '', tipoEl);
         const grupos = Object.keys(parsed).sort();
         const efeitosGrupos = {};
         grupos.forEach(g => { efeitosGrupos[g] = (d.efeitosGrupos||{})[g] || 'neutro'; });
         // Parse threshold markers
-        const tipoEl = d.tipoEletrodo || tipoEletrodoGlobal;
         const pw0 = Object.values(parsed).flatMap(s=>Object.values(s)).flat()[0]?.pw || 60;
         const freq0 = Object.values(parsed).flatMap(s=>Object.values(s)).flat()[0]?.freq || 130;
         // If thresholdL text contains side markers (Esquerdo/Direito), split automatically
