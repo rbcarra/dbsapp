@@ -156,6 +156,149 @@ const extractBatteryImpedance = (fullText) => {
   return { bateria, impedanciaL, impedanciaR };
 };
 
+
+// ─── NAMED CONTACT FORMAT PARSER ─────────────────────────────────────────
+// Handles formats like:
+//   "L4 2,0 mA 50ms 130 hz"
+//   "R3 2,3 60 ms 130 hz"
+//   "R3+R4 50/50 3,0 60 ms 130 hz"
+//   "R4 20% + R3 A50% + B30% 2,6 60 ms 130 hz"
+//   "R4 12% + R3 A70% + B18% +R3c -5% 2,4 80 ms 130 hz"
+
+// Step 1: separate the contact spec from amp/pw/freq values
+const splitContactsFromParams = (line) => {
+  const numRe = /\b(\d+[.,]\d+|\d+)\s*(%|m[aA]|[Vv](?![A-Za-z])|ms(?![a-zA-Z])|pw(?![a-zA-Z])|[Hh]z|µs|us(?![a-zA-Z]))?/g;
+  const paramNums = [];
+  let m;
+  numRe.lastIndex = 0;
+  while ((m = numRe.exec(line)) !== null) {
+    if (!m[1]) continue;
+    const val = parseFloat(m[1].replace(',','.'));
+    const unit = m[2] || null;
+    const before = line.slice(Math.max(0, m.index-1), m.index);
+    if (/[A-Za-z]$/.test(before) && !unit) continue; // digit attached to letter = part of contact ref
+    if (unit === '%') continue;
+    paramNums.push({ val, unit, idx: m.index });
+  }
+
+  let firstParamStart = line.length;
+  let ampVal = 0;
+  for (let i = 0; i < paramNums.length; i++) {
+    const p = paramNums[i];
+    if (/m[aA]|[Vv]/.test(p.unit || '')) { ampVal = p.val; firstParamStart = p.idx; break; }
+    if (/ms|pw|µs|us|[Hh]z/.test(p.unit || '')) { firstParamStart = p.idx; break; }
+    if (!p.unit && p.val >= 0.5 && p.val <= 10 && i+1 < paramNums.length) {
+      ampVal = p.val; firstParamStart = p.idx; break;
+    }
+  }
+
+  const paramStr = line.slice(firstParamStart);
+  const pwM  = paramStr.match(/(\d+[.,]?\d*)\s*(ms|pw|µs|us)(?![a-zA-Z])/i);
+  const hzM  = paramStr.match(/(\d+[.,]?\d*)\s*[Hh]z/);
+  const ampM = paramStr.match(/(\d+[.,]?\d*)\s*(m[aA]|[Vv](?![Hh][Zz])(?![a-zA-Z]))/);
+  const pwVal   = pwM  ? parseFloat(pwM[1].replace(',','.')) : 60;
+  const freqVal = hzM  ? parseFloat(hzM[1].replace(',','.')) : 130;
+  if (ampM && !ampVal) ampVal = parseFloat(ampM[1].replace(',','.'));
+
+  return { contactSpec: line.slice(0, firstParamStart).trim(), amp: ampVal, pw: pwVal, freq: freqVal };
+};
+
+// Step 2: parse contact tokens from the spec string
+const parseNamedContactLine = (line, tipoEl = '4-ring') => {
+  if (!/^[LRlr]\d/.test(line.trim())) return null;
+  const clean = line.split(/\s*-\s*>|→/).shift().trim();
+  const side = /^[Ll]/.test(clean) ? 'L' : 'R';
+  const { contactSpec, amp, pw, freq } = splitContactsFromParams(clean);
+  if (!amp && !pw && !freq) return null;
+
+  const isDirEl = tipoEl === 'directional';
+  const ringKeys = ['0','1','2','3'];
+  const dirKeys  = ['0','1','2','3','1A','1B','1C','2A','2B','2C','3A','3B','3C'];
+  const contatos = {};
+  (isDirEl ? dirKeys : ringKeys).forEach(k => { contatos[k] = { state: 'off', perc: 100 }; });
+
+  // Detect anode-default mode: explicit "-N%" = cathode, everything else = anode
+  const anodeDefault = /[\s+]-\d+%/.test(contactSpec);
+
+  // Two-pass tokenizer:
+  // Pass 1: find main contact refs: ([+|-]?)[LR]N — these set side+level
+  // Pass 2: find directional sub-tokens: [A-C]N% (may or may not be preceded by LR)
+  const refs = [];
+
+  // Tokenize the contactSpec into segments split by +
+  // Each segment is either: [LR]N[letter]? [perc]% or [letter][perc]%
+  const segments = contactSpec.split(/\s*\+\s*/);
+  let lastLvIdx = 0;
+
+  for (const seg of segments) {
+    const segTrim = seg.trim();
+    if (!segTrim) continue;
+
+    // Full contact ref: [LR]N [letter]? [perc]%
+    // e.g. "R4 12%", "R3 A70%", "R3c -5%", "R3+R4" (handled via outer split)
+    const fullRe = /^([+\-]?\s*[LRlr])(\d)\s*([ABCabc])?\s*([\-]?\d+)?\s*%?$/;
+    const fullM = segTrim.match(fullRe);
+
+    if (fullM) {
+      const signPfx = (fullM[1] || '').replace(/\s/g,'').replace(/[LRlr]$/,'');
+      const isAnode = signPfx === '+';
+      lastLvIdx = Math.max(0, Math.min(3, parseInt(fullM[2]) - 1));
+      const letter = fullM[3] ? fullM[3].toUpperCase() : null;
+      const percStr = fullM[4];
+      const perc = percStr !== undefined && percStr !== null ? parseInt(percStr) : null;
+      refs.push({ lvIdx: lastLvIdx, letter, perc, isAnode });
+      continue;
+    }
+
+    // Sub-token: just a letter+perc (e.g. "A70%", "B18%") — belongs to lastLvIdx
+    const subRe = /^([ABCabc])\s*([\-]?\d+)%$/;
+    const subM = segTrim.match(subRe);
+    if (subM) {
+      const letter = subM[1].toUpperCase();
+      const perc   = parseInt(subM[2]);
+      refs.push({ lvIdx: lastLvIdx, letter, perc, isAnode: false });
+      continue;
+    }
+
+    // Shorthand "N/N" standalone (e.g. "50/50") — split last two refs
+    const splitM = segTrim.match(/^(\d+)\/(\d+)$/);
+    if (splitM && refs.length >= 2) {
+      refs[refs.length-2].perc = parseInt(splitM[1]);
+      refs[refs.length-1].perc = parseInt(splitM[2]);
+      continue;
+    }
+    // "[LR]N N/N" inline split (e.g. "R4 50/50") — adds a new ref with split perc
+    const refSplit = segTrim.match(/^([+\-]?\s*[LRlr])(\d)\s+(\d+)\/(\d+)$/);
+    if (refSplit) {
+      const signPfx2 = (refSplit[1]||'').replace(/\s/g,'').replace(/[LRlr]$/,'');
+      lastLvIdx = Math.max(0, Math.min(3, parseInt(refSplit[2]) - 1));
+      if (refs.length > 0) refs[refs.length-1].perc = parseInt(refSplit[3]);
+      refs.push({ lvIdx: lastLvIdx, letter: null, perc: parseInt(refSplit[4]), isAnode: signPfx2 === '+' });
+      continue;
+    }
+  }
+
+  if (refs.length === 0) return null;
+  const noPerc = refs.every(r => r.perc === null);
+
+  refs.forEach((ref) => {
+    let pct = ref.perc !== null ? Math.abs(ref.perc) : (noPerc ? Math.round(100 / refs.length) : 100);
+    const state = anodeDefault
+      ? ((ref.perc !== null && ref.perc < 0) ? '-' : '+')
+      : (ref.isAnode ? '+' : '-');
+
+    if (isDirEl && ref.letter) {
+      const key = `${ref.lvIdx}${ref.letter}`;
+      if (contatos[key] !== undefined) contatos[key] = { state, perc: pct };
+    } else if (!ref.letter) {
+      const key = String(ref.lvIdx);
+      if (contatos[key] !== undefined) contatos[key] = { state, perc: pct };
+    }
+  });
+
+  return { contatos, amp, pw, freq, side };
+};
+
 // ─── PROGRAMMING PARSER ───────────────────────────────────────────────────
 const isImpedanceOnlyLine = (text) => {
   // Lines like "Lead E 2108 1.2mA" or "Lead E 2108" where there's no pw/freq
@@ -171,7 +314,7 @@ const isImpedanceOnlyLine = (text) => {
   return hasImpedance && !hasContacts;
 };
 
-const parseProgramming = (rawText) => {
+const parseProgramming = (rawText, tipoEletrodo = '4-ring') => {
   if (!rawText) return {};
   const result = {};
   let currentGroup = 'A';
@@ -203,6 +346,12 @@ const parseProgramming = (rawText) => {
       const g = gm[1].toUpperCase();
       currentGroup = {'1':'A','2':'B','3':'C','4':'D'}[g] || g;
       inGroupSection = true;
+      // Check if named contact info follows on same line after the group marker
+      const afterGroup = line.slice(gm[0].length).trim();
+      if (afterGroup && /^[LRlr]\d/.test(afterGroup)) {
+        const nc = parseNamedContactLine(afterGroup, tipoEletrodo);
+        if (nc) { push(currentGroup, nc.side, { contatos: nc.contatos, amp: nc.amp, pw: nc.pw, freq: nc.freq }); }
+      }
       continue;
     }
 
@@ -235,6 +384,15 @@ const parseProgramming = (rawText) => {
     const m4 = line.match(/^([EDed])\s*[:.\s]\s*(.*)/);
     if (m4 && !/^(eletrodo|desc|esq|dir)/i.test(line)) {
       push(currentGroup, parseSide(m4[1]), parseParams(m4[2]||line)); continue;
+    }
+
+    // Named-contact format: "L4 2,0 mA 50ms 130hz", "R3+R4 50/50 3,0 ...", etc.
+    if (/^[LRlr]\d/.test(line)) {
+      const nc = parseNamedContactLine(line, tipoEletrodo);
+      if (nc && (nc.amp > 0 || nc.pw || nc.freq)) {
+        push(currentGroup, nc.side, { contatos: nc.contatos, amp: nc.amp, pw: nc.pw, freq: nc.freq });
+        continue;
+      }
     }
   }
   return result;
@@ -469,7 +627,7 @@ const StepDot = ({label,active,done}) => (
 // ─── PARSE PREVIEW ────────────────────────────────────────────────────────
 const ParsePreview = ({rawText, onUpdate}) => {
   const [localRaw, setLocalRaw] = useState(rawText);
-  const parsed = useMemo(() => parseProgramming(localRaw), [localRaw]);
+  const parsed = useMemo(() => parseProgramming(localRaw, '4-ring'), [localRaw]);
   const groups = Object.keys(parsed).sort();
 
   useEffect(() => { onUpdate(localRaw, parsed); }, [localRaw]);
@@ -518,7 +676,7 @@ const ParsePreview = ({rawText, onUpdate}) => {
 // Shown when parse detects no leads — lets user fix the text and retry
 const ManualProgEditor = ({ rawText, onSave }) => {
   const [val, setVal] = React.useState(rawText || '');
-  const parsed = useMemo(() => parseProgramming(val), [val]);
+  const parsed = useMemo(() => parseProgramming(val, '4-ring'), [val]);
   const groups = Object.keys(parsed).sort();
 
   return (
@@ -559,6 +717,14 @@ const ManualProgEditor = ({ rawText, onSave }) => {
 // ─── APP ──────────────────────────────────────────────────────────────────
 const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null }) => {
   const [phase, setPhase] = useState(pacienteInicial ? 'divide' : 'patient');
+  const [showTutorial, setShowTutorial] = useState(() => {
+    try { return !localStorage.getItem('dbs_extrator_tutorial_seen'); }
+    catch(e) { return true; }
+  });
+  const dismissTutorial = () => {
+    try { localStorage.setItem('dbs_extrator_tutorial_seen','1'); } catch(e) {}
+    setShowTutorial(false);
+  };
   const [nome,  setNome]  = useState(pacienteInicial?.nome || '');
   const [hc,    setHc]    = useState(pacienteInicial?.hc || '');
   const [tipoEletrodoGlobal, setTipoEletrodoGlobal] = useState('4-ring');
@@ -722,7 +888,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
     } else {
       const rows = consultations.map((_,i) => {
         const d = captured[i] || {};
-        const parsed = parseProgramming(d.programming || '');
+        const parsed = parseProgramming(d.programming || '', tipoEl);
         const grupos = Object.keys(parsed).sort();
         const efeitosGrupos = {};
         grupos.forEach(g => { efeitosGrupos[g] = (d.efeitosGrupos||{})[g] || 'neutro'; });
@@ -835,10 +1001,24 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
           </div>
         </div>
         <div className="flex items-center gap-4">
+          {phase !== 'patient' && phase !== 'review' && (
+            <button onClick={() => {
+              if (phase === 'extract') { setPhase('divide'); setConsultIdx(0); setFieldIdx(0); }
+              else if (phase === 'divide') setPhase('patient');
+            }}
+              className="text-[10px] text-slate-500 hover:text-slate-300 border border-slate-700 hover:border-slate-500 px-2.5 py-1 rounded-lg transition-all shrink-0">
+              ← Voltar
+            </button>
+          )}
           {['patient','divide','extract','review'].map((p,i) => (
             <StepDot key={p} label={['Paciente','Divisão','Extração','Revisão'][i]}
               active={phase===p} done={['patient','divide','extract','review'].indexOf(phase)>i} />
           ))}
+          <button onClick={() => setShowTutorial(true)}
+            className="text-[10px] text-slate-500 hover:text-amber-400 border border-slate-700 hover:border-amber-500 px-2 py-1 rounded-lg transition-all ml-auto shrink-0"
+            title="Ver tutorial">
+            ?
+          </button>
         </div>
         <button onClick={onClose}
           className="text-slate-400 hover:text-white text-2xl leading-none font-bold ml-4 shrink-0"
@@ -880,9 +1060,17 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
         <div className="flex-1 flex flex-col p-4 gap-3 min-h-0 overflow-hidden">
           {!textReady ? (
             <div className="flex-1 flex flex-col gap-3 min-h-0">
-              <div>
-                <h2 className="text-sm font-black text-white">Cole o Prontuário Completo</h2>
-                <p className="text-xs text-slate-400">Todas as consultas de {nome} juntas</p>
+              <div className="flex items-center gap-3">
+                {!pacienteInicial && (
+                  <button onClick={() => setPhase('patient')}
+                    className="text-slate-400 hover:text-white text-xs border border-slate-700 hover:border-slate-500 px-2.5 py-1.5 rounded-lg transition-all shrink-0">
+                    ← Paciente
+                  </button>
+                )}
+                <div>
+                  <h2 className="text-sm font-black text-white">Cole o Prontuário Completo</h2>
+                  <p className="text-xs text-slate-400">Todas as consultas de {nome} juntas</p>
+                </div>
               </div>
               <textarea value={rawText} onChange={e=>setRawText(e.target.value)}
                 className="flex-1 bg-slate-900 border border-slate-700 rounded-xl p-4 text-sm text-slate-300 font-mono focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none leading-relaxed"
@@ -1260,6 +1448,56 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                   :'Concluir e Revisar →'}
               </button>
               <p className="text-[9px] text-slate-600 text-center">Enter confirma campos obrigatórios · Limiares: selecione e clique no botão</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══ TUTORIAL POPUP ══════════════════════════════════════════════════ */}
+      {showTutorial && (
+        <div className="absolute inset-0 z-[80] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 rounded-2xl">
+          <div className="bg-slate-800 border border-slate-600 rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto flex flex-col">
+            <div className="px-6 py-4 border-b border-slate-700">
+              <h2 className="text-base font-black text-white">📋 Como usar o Extrator de Prontuários</h2>
+              <p className="text-[11px] text-slate-400 mt-0.5">Leia antes de começar</p>
+            </div>
+            <div className="px-6 py-4 flex flex-col gap-4 text-[12px] text-slate-300 leading-relaxed">
+              <div>
+                <p className="font-bold text-amber-300 mb-1">📄 Colando o prontuário</p>
+                <p>Cole o texto completo do prontuário de um paciente — <strong className="text-white">todas as consultas juntas</strong>, como estão no sistema. O extrator identificará automaticamente cada consulta pela data no cabeçalho.</p>
+              </div>
+              <div>
+                <p className="font-bold text-amber-300 mb-1">📅 Divisão por data</p>
+                <p>Cada consulta é separada pela data de cabeçalho (ex: <code className="bg-slate-700 px-1 rounded">15/03/2022</code> ou <code className="bg-slate-700 px-1 rounded">Retorno 11/06/2021</code>). Você pode adicionar ou remover divisões manualmente na etapa seguinte.</p>
+              </div>
+              <div>
+                <p className="font-bold text-amber-300 mb-1">⚡ Extração da programação</p>
+                <p>A programação é lida <strong className="text-white">linha a linha</strong>. Por isso:</p>
+                <ul className="list-disc ml-4 mt-1 flex flex-col gap-1">
+                  <li>Cada lead (E e D) deve estar em <strong className="text-white">linhas separadas</strong></li>
+                  <li>Se ambos os eletrodos estiverem na mesma linha, corrija manualmente na etapa de revisão</li>
+                  <li>Formatos suportados: <code className="bg-slate-700 px-1 rounded">Lead E / ESQ / E: / ESQ: / L4</code> para esquerdo, e equivalentes para direito</li>
+                </ul>
+              </div>
+              <div>
+                <p className="font-bold text-amber-300 mb-1">✏️ Revisão obrigatória</p>
+                <p>O parser <strong className="text-white">pode não capturar tudo corretamente</strong>, especialmente em formatos não convencionais. Na etapa de revisão você pode:</p>
+                <ul className="list-disc ml-4 mt-1 flex flex-col gap-1">
+                  <li>Corrigir qualquer campo manualmente</li>
+                  <li>Digitar a programação diretamente nos campos de contato e parâmetros</li>
+                  <li>Adicionar ou remover sessões</li>
+                </ul>
+              </div>
+              <div className="bg-slate-700/50 rounded-lg p-3 border border-slate-600">
+                <p className="font-bold text-slate-200 mb-1">💡 Dica</p>
+                <p>Se uma sessão não foi capturada corretamente, é sempre possível importar as sessões corretas e corrigir as demais diretamente no DBS Log após a importação.</p>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-slate-700 flex justify-end">
+              <button onClick={dismissTutorial}
+                className="bg-amber-400 hover:bg-amber-300 text-slate-900 font-black px-8 py-2.5 rounded-lg text-sm transition-all shadow-lg">
+                Entendido, começar →
+              </button>
             </div>
           </div>
         </div>
