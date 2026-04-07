@@ -326,7 +326,8 @@ const parseProgramming = (rawText, tipoEletrodo = '4-ring') => {
     // Limit to 2 programs per side per group (interleaving cap)
     if (result[group][side].length >= 2) return;
     // Skip entries with no contacts and no meaningful amp
-    if (!prog.contatos && prog.amp === 0) return;
+    const hasContatos = prog.contatos && (typeof prog.contatos === 'string' ? prog.contatos.trim() : Object.values(prog.contatos).some(v => v && v.state !== 'off'));
+    if (!hasContatos && prog.amp === 0) return;
     result[group][side].push(prog);
   };
 
@@ -573,7 +574,7 @@ const buildCSVString = (rows) => {
           row.push('','','','', ef);
         } else {
           const p = progs[0];
-          row.push(p.contatos||'', p.amp||'', p.pw||'', p.freq||'', ef);
+          row.push(contatosToStr(p.contatos), p.amp||'', p.pw||'', p.freq||'', ef);
         }
       });
     });
@@ -596,6 +597,18 @@ const exportCSV = (rows) => {
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
 const TIPOS_ELETRODO_EXTRATOR = ['4-ring', '8-ring', 'directional'];
+
+// Convert contatos to display string regardless of format (string or object)
+const contatosToStr = (contatos) => {
+  if (!contatos) return '?';
+  if (typeof contatos === 'string') return contatos || '?';
+  // Object format: {0:{state:'-',perc:100}, 1A:{state:'+',perc:50}, ...}
+  const active = Object.entries(contatos)
+    .filter(([, v]) => v && v.state !== 'off')
+    .sort(([a], [b]) => a.localeCompare(b, undefined, {numeric: true}))
+    .map(([k, v]) => `${k}${v.state}${v.perc !== 100 ? v.perc + '%' : ''}`);
+  return active.length > 0 ? active.join(' ') : '(off)';
+};
 
 const FIELDS = ['date','evolution','programming'];
 const FIELDS_OPTIONAL = ['thresholdL', 'thresholdR'];
@@ -655,7 +668,7 @@ const ParsePreview = ({rawText, onUpdate}) => {
                       Gr.{g} Lead {side==='L'?'E':'D'}{progs.length>1?` (${pi+1})`:''}
                     </span>
                     <span className="text-[11px] font-mono text-slate-300">
-                      {p.contatos||'?'} · {p.amp} mA · {p.pw} µs · {p.freq} Hz
+                      {contatosToStr(p.contatos)} · {p.amp} mA · {p.pw} µs · {p.freq} Hz
                     </span>
                   </div>
                 ));
@@ -695,7 +708,7 @@ const ManualProgEditor = ({ rawText, onSave }) => {
             return progs.map((p, pi) => (
               <div key={g+side+pi} className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 rounded px-2 py-1">
                 <span className="text-[10px] font-black text-emerald-400 w-20 shrink-0">Gr.{g} Lead {side==='L'?'E':'D'}{progs.length>1?` (${pi+1})`:''}</span>
-                <span className="text-[10px] font-mono text-slate-300">{p.contatos||'?'} · {p.amp}V · {p.pw}µs · {p.freq}Hz</span>
+                <span className="text-[10px] font-mono text-slate-300">{contatosToStr(p.contatos)} · {p.amp}V · {p.pw}µs · {p.freq}Hz</span>
               </div>
             ));
           }))}
@@ -1296,7 +1309,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                     return progs.map((p,pi) => (
                       <div key={`${g}${side}${pi}`} className="mb-1.5 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
                         <p className="text-[10px] font-bold text-emerald-400 mb-0.5">Gr.{g} Lead {side==='L'?'E':'D'}{progs.length>1?` (${pi+1})`:''}:</p>
-                        <p className="text-[11px] font-mono text-slate-300">{p.contatos||'?'} · {p.amp} mA · {p.pw} µs · {p.freq} Hz</p>
+                        <p className="text-[11px] font-mono text-slate-300">{contatosToStr(p.contatos)} · {p.amp} mA · {p.pw} µs · {p.freq} Hz</p>
                       </div>
                     ));
                   }))}
@@ -1565,7 +1578,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                           <div key={`${g}${side}${pi}`} className="flex flex-col gap-0.5 bg-slate-800/60 rounded p-1.5 border border-emerald-800/30">
                             <div className="flex items-center gap-1 mb-0.5">
                               <span className="text-[9px] font-black text-emerald-500">Gr.{g}</span>
-                              <input value={p.contatos} onChange={e=>updateParsedProg(ri,g,side,pi,'contatos',e.target.value)}
+                              <input value={contatosToStr(p.contatos)} onChange={e=>updateParsedProg(ri,g,side,pi,'contatos',e.target.value)}
                                 className="bg-slate-700 border border-slate-600 rounded px-1 py-0 font-mono text-emerald-300 w-16 text-[11px] focus:outline-none focus:ring-1 focus:ring-emerald-500"
                                 title="Contatos" />
                             </div>
