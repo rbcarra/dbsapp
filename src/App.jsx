@@ -11,11 +11,12 @@ import { VisualizadorEletrodo, RenderPrograma } from './ProgramComponents';
 import { TimelineHistorico } from './DisplayComponents';
 import { ExtractorModal } from './ExtractorComponents';
 import { UPDRSModal } from './UPDRSComponents';
+import { ScalesModal } from './ScalesComponents';
 
 import { auth, db, appId } from './firebase';
 
 
-// Feito Por Rafael Carra ao longo de muitos platões
+
 
 // --- APLICATIVO PRINCIPAL ---
 
@@ -67,6 +68,7 @@ export default function App() {
   const [showExtrator, setShowExtrator] = useState(false);
   const [showHistoricoText, setShowHistoricoText] = useState(false);
   const [showUPDRS, setShowUPDRS] = useState(false);
+  const [showScales, setShowScales] = useState(false);
   const [autoSaveStatus, setAutoSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
   // Helper: cap programs to max 2 per side in any dadosGrupos object
   const capPrograms = (grupos) => {
@@ -981,8 +983,9 @@ export default function App() {
 
     // Acrescentar texto na anotação
     const linhaTexto = `
---- Última programação do Grupo ${grupo}. Avaliação: ${textoEfeito}.
-${progTexto}
+--- Programação da última sessão ---
+Grupo ${grupo}:
+${progTexto}Avaliação: ${textoEfeito}
 `;
     setNotasLivres(prev => (prev || '') + linhaTexto);
     showToast(`Efeito do Grupo ${grupo} salvo: ${textoEfeito}`);
@@ -1666,6 +1669,11 @@ ${progTexto}
                 title="Abrir pontuação MDS-UPDRS Parte III">
                 📊 UPDRS-III
               </button>
+              <button onClick={() => setShowScales(true)}
+                className="flex items-center gap-1.5 text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg font-bold transition-all border border-indigo-200"
+                title="Escalas clínicas: BFM, SARA, PDQ, YGTSS, Exame Parkinsoniano">
+                📐 Escalas
+              </button>
             </div>
             <button onClick={copiarConsultaClipboard}
               className="flex items-center gap-1.5 text-xs bg-slate-700 hover:bg-slate-900 text-white px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm"
@@ -2005,6 +2013,16 @@ ${progTexto}
       {showUPDRS && (
         <UPDRSModal
           onClose={() => setShowUPDRS(false)}
+          onInserir={(text) => {
+            setNotasLivres(prev => (prev ? prev + '\n\n' : '') + text);
+          }}
+        />
+      )}
+
+      {/* SCALES MODAL */}
+      {showScales && (
+        <ScalesModal
+          onClose={() => setShowScales(false)}
           onInserir={(text) => {
             setNotasLivres(prev => (prev ? prev + '\n\n' : '') + text);
           }}
