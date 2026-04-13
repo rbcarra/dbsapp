@@ -889,9 +889,455 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
   );
 };
 
-const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, isAmplitude, historicoRef, marcadores, marcadoresRing, marcadoresTodosL, historicoTodos, sessaoAtualTimestamp, tipoEletrodo, programaContatos }) => {
-  const [agruparPorFreq, setAgruparPorFreq] = React.useState(false);
 
+
+// ─── ANATOMICAL ATLAS PANEL ──────────────────────────────────────────────────
+// Schematic 3-plane atlas based on published stereotactic coordinates
+// (Morel 2007, DISTAL atlas, Yelnik 2007, Plantinga 2016)
+// Positions in mm relative to electrode center for typical targeting
+
+const ATLAS_DATA = {
+  STN: {
+    label: 'Núcleo Subtalâmico (STN)',
+    hint: 'GPi/STN: alvo em Parkinson/distonia',
+    coronal: [ // x (lat-med), z (inf-sup), rx, rz, name, color
+      { x:  0,   z:  0,   rx: 1.5, rz: 1.2, name: 'STN',  color: '#10b981', fill: true },
+      { x: -0.5, z:  2.5, rx: 1.0, rz: 0.8, name: 'ZI',   color: '#06b6d4', fill: false },
+      { x:  3.5, z:  1.0, rx: 0.8, rz: 3.5, name: 'C.Int.',color:'#f97316', fill: false },
+      { x:  0,   z: -2.5, rx: 1.8, rz: 1.0, name: 'SNr',  color: '#94a3b8', fill: false },
+      { x: -2.5, z:  0.5, rx: 1.0, rz: 1.0, name: 'RN',   color: '#e11d48', fill: false },
+    ],
+    axial: [ // x, y (ant-post), rx, ry
+      { x:  0,   y:  0,   rx: 1.2, ry: 0.8, name: 'STN',  color: '#10b981', fill: true },
+      { x:  3.5, y:  0.5, rx: 0.8, ry: 2.5, name: 'C.Int.',color:'#f97316', fill: false },
+      { x: -2.5, y:  0,   rx: 1.0, ry: 1.0, name: 'RN',   color: '#e11d48', fill: false },
+      { x:  0.5, y:  2.5, rx: 0.8, ry: 0.8, name: 'ZI',   color: '#06b6d4', fill: false },
+    ],
+    sagital: [ // y (ant-post), z (inf-sup), ry, rz
+      { y:  0,   z:  0,   ry: 0.8, rz: 1.2, name: 'STN',  color: '#10b981', fill: true },
+      { y:  0.5, z:  2.5, ry: 0.8, rz: 0.8, name: 'ZI',   color: '#06b6d4', fill: false },
+      { y:  0,   z: -2.5, ry: 1.5, rz: 1.0, name: 'SNr',  color: '#94a3b8', fill: false },
+      { y: -0.5, z:  1.5, ry: 1.0, rz: 1.5, name: 'Thal.',color: '#a78bfa', fill: false },
+    ],
+  },
+  GPi: {
+    label: 'Globus Pallidus internus (GPi)',
+    hint: 'Alvo em distonia, DP com discinesia',
+    coronal: [
+      { x:  0,   z:  0,   rx: 1.8, rz: 1.5, name: 'GPi',  color: '#10b981', fill: true },
+      { x:  2.5, z:  0.5, rx: 1.5, rz: 1.0, name: 'GPe',  color: '#06b6d4', fill: false },
+      { x:  4.0, z:  0.5, rx: 0.8, rz: 4.0, name: 'C.Int.',color:'#f97316', fill: false },
+      { x: -0.5, z: -2.0, rx: 2.0, rz: 1.0, name: 'SNr',  color: '#94a3b8', fill: false },
+      { x: -2.0, z:  0.5, rx: 1.5, rz: 1.0, name: 'Putamen',color:'#a78bfa',fill: false },
+    ],
+    axial: [
+      { x:  0,   y:  0,   rx: 1.5, ry: 1.0, name: 'GPi',  color: '#10b981', fill: true },
+      { x:  2.5, y:  0,   rx: 1.2, ry: 0.8, name: 'GPe',  color: '#06b6d4', fill: false },
+      { x:  4.0, y: -1.0, rx: 0.8, ry: 2.5, name: 'C.Int.',color:'#f97316', fill: false },
+      { x: -2.5, y:  0,   rx: 1.5, ry: 1.2, name: 'Putamen',color:'#a78bfa',fill: false },
+    ],
+    sagital: [
+      { y:  0,   z:  0,   ry: 1.0, rz: 1.5, name: 'GPi',  color: '#10b981', fill: true },
+      { y: -2.0, z:  0.5, ry: 1.0, rz: 1.0, name: 'GPe',  color: '#06b6d4', fill: false },
+      { y:  0,   z:  2.5, ry: 1.5, rz: 1.0, name: 'Put.',  color: '#a78bfa', fill: false },
+    ],
+  },
+  VIM: {
+    label: 'VIM (núcleo ventral intermediário)',
+    hint: 'Alvo em tremor essencial / DP tremorigênico',
+    coronal: [
+      { x:  0,   z:  0,   rx: 1.2, rz: 1.2, name: 'VIM',  color: '#10b981', fill: true },
+      { x:  1.5, z:  0,   rx: 1.0, rz: 1.0, name: 'Vc',   color: '#06b6d4', fill: false },
+      { x: -2.5, z:  0,   rx: 1.0, rz: 1.0, name: 'VA/VL', color:'#a78bfa', fill: false },
+      { x:  3.5, z:  0,   rx: 0.8, rz: 4.0, name: 'C.Int.',color:'#f97316', fill: false },
+      { x: -0.5, z: -2.5, rx: 1.5, rz: 0.8, name: 'ZI',   color: '#64748b', fill: false },
+    ],
+    axial: [
+      { x:  0,   y:  0,   rx: 1.2, ry: 1.0, name: 'VIM',  color: '#10b981', fill: true },
+      { x:  2.0, y:  0,   rx: 1.0, ry: 1.0, name: 'Vc',   color: '#06b6d4', fill: false },
+      { x: -2.0, y:  0,   rx: 1.0, ry: 1.2, name: 'VA/VL', color:'#a78bfa', fill: false },
+      { x:  3.5, y: -0.5, rx: 0.8, ry: 2.5, name: 'C.Int.',color:'#f97316', fill: false },
+    ],
+    sagital: [
+      { y:  0,   z:  0,   ry: 1.0, rz: 1.2, name: 'VIM',  color: '#10b981', fill: true },
+      { y:  2.0, z:  0,   ry: 0.8, rz: 1.0, name: 'Vc',   color: '#06b6d4', fill: false },
+      { y: -2.0, z:  0,   ry: 1.0, rz: 1.0, name: 'VA',   color: '#a78bfa', fill: false },
+      { y:  0,   z: -2.5, ry: 1.5, rz: 0.8, name: 'ZI',   color: '#64748b', fill: false },
+    ],
+  },
+};
+
+const AtlasPanel = ({ target, S, C, mmToSvg, anteriorContact }) => {
+  const atlas = ATLAS_DATA[target];
+  if (!atlas) return null;
+
+  const renderPlane = (structures, getX, getY, getRx, getRy, xlabel, ylabel, label) => (
+    <div className="flex flex-col items-center gap-0.5">
+      <span className="text-[7px] text-slate-500 font-bold">{label}</span>
+      <svg width={S} height={S} viewBox={`0 0 ${S} ${S}`} className="rounded-lg border border-slate-200 bg-slate-50/80">
+        {/* Grid rings */}
+        {[1,2,3,4,5].map(mm => (
+          <circle key={mm} cx={C} cy={C} r={mmToSvg(mm)} fill="none"
+            stroke={mm===Math.floor(mm)?'#e2e8f0':'#f1f5f9'}
+            strokeWidth={0.6} strokeDasharray={mm%1===0?undefined:'1,3'}/>
+        ))}
+        <line x1={12} y1={C} x2={S-12} y2={C} stroke="#e2e8f0" strokeWidth={0.4}/>
+        <line x1={C} y1={12} x2={C} y2={S-12} stroke="#e2e8f0" strokeWidth={0.4}/>
+        {/* mm labels */}
+        {[1,2,3].map(mm => (
+          <text key={mm} x={C+mmToSvg(mm)+2} y={C-2} fontSize={5.5} fill="#cbd5e1">{mm}mm</text>
+        ))}
+        {/* Electrode */}
+        <circle cx={C} cy={C} r={4} fill="#334155"/>
+        <circle cx={C} cy={C} r={2} fill="#94a3b8"/>
+        {/* Axis labels */}
+        <text x={S-8} y={C-3} textAnchor="end" fontSize={6} fill="#94a3b8">{xlabel}+</text>
+        <text x={C+3} y={10} fontSize={6} fill="#94a3b8">{ylabel}+</text>
+        {/* Structures */}
+        {structures.map((s, i) => {
+          const cx = C + getX(s) * mmToSvg(1);
+          const cy = C - getY(s) * mmToSvg(1);
+          const rx = getRx(s) * mmToSvg(1);
+          const ry = getRy(s) * mmToSvg(1);
+          return (
+            <g key={i}>
+              <ellipse cx={cx} cy={cy} rx={rx} ry={ry}
+                fill={s.color} fillOpacity={s.fill ? 0.3 : 0.08}
+                stroke={s.color} strokeWidth={s.fill ? 1.5 : 1}
+                strokeDasharray={s.fill ? undefined : '2,2'}/>
+              <text x={cx} y={cy + 0.5} textAnchor="middle" dominantBaseline="middle"
+                fontSize={5.5} fontWeight="bold" fill={s.color} opacity={0.9}>
+                {s.name}
+              </text>
+            </g>
+          );
+        })}
+        {/* Anterior indicator */}
+        <text x={C} y={S-4} textAnchor="middle" fontSize={5.5} fill="#94a3b8" fontStyle="italic">
+          ↓ ant
+        </text>
+      </svg>
+    </div>
+  );
+
+  return (
+    <div className="mt-1 px-0.5">
+      <p className="text-[7px] font-bold text-indigo-600 uppercase tracking-wider mb-1">
+        🧠 Atlas — {atlas.label}
+      </p>
+      <p className="text-[7px] text-slate-400 mb-1.5 italic">{atlas.hint}</p>
+      <div className="flex gap-2 flex-wrap">
+        {renderPlane(atlas.coronal,  s => s.x,  s => s.z, s => s.rx, s => s.rz, 'lat', 'sup', 'Coronal')}
+        {renderPlane(atlas.axial,    s => s.x,  s => s.y, s => s.rx, s => s.ry, 'lat', 'ant', 'Axial')}
+        {renderPlane(atlas.sagital,  s => s.y,  s => s.z, s => s.ry, s => s.rz, 'ant', 'sup', 'Sagital')}
+      </div>
+      <p className="text-[6px] text-slate-300 mt-1">
+        Posições esquemáticas relativas ao eletrodo (Morel 2007, DISTAL atlas). Não substitui reconstrução de imagem.
+      </p>
+    </div>
+  );
+};
+
+// ─── VTA VIEW ────────────────────────────────────────────────────────────────
+// Estimated Volume of Tissue Activated overlay in physical space (mm)
+// Uses analytical model: r ≈ k × √(I × PW) (Butson & McIntyre 2006, empirical)
+// Displayed as alternative mode to avoid polluting the clinical marker view
+
+const VTA_STRUCTURES = {
+  'Cápsula':     { color: '#f97316', label: 'Cáps.' },
+  'Parestesia':  { color: '#a78bfa', label: 'Pares.' },
+  'Disartria':   { color: '#f43f5e', label: 'Disar.' },
+  'bradicinesia':{ color: '#10b981', label: 'Brad.' },
+  'rigidez':     { color: '#06b6d4', label: 'Rig.' },
+  'tremor':      { color: '#3b82f6', label: 'Trem.' },
+  'Outros':      { color: '#94a3b8', label: 'Outro' },
+};
+
+const POSITIVE_EFFECTS = new Set(['bradicinesia','rigidez','tremor']);
+
+const VTAView = ({ programaContatos, ampAtual, pw, marcadores, marcadoresRing,
+                   historicoRef, anteriorContact, tipoEletrodo, sessaoAtualTimestamp,
+                   forcedSize, structuralMap }) => {
+  const [kFactor, setKFactor] = React.useState(0.45); // mm / sqrt(mA·µs)
+  const [showThresh, setShowThresh] = React.useState(true);
+  const [showHist, setShowHist] = React.useState(true);
+
+  const S = forcedSize ?? 260;
+  const C = S / 2;
+  const MAX_MM = 5.0;  // display radius in mm
+  const mmToSvg = (mm) => (mm / MAX_MM) * (C - 12);
+
+  const anteriorRad = (CONTACT_ANTERIOR_ANGLES[anteriorContact] ?? 90) * Math.PI / 180;
+  const xyTheta = -Math.PI / 2 - anteriorRad;
+  const rotXY = (ux, uy) => ({
+    rx: ux * Math.cos(xyTheta) - uy * Math.sin(xyTheta),
+    ry: ux * Math.sin(xyTheta) + uy * Math.cos(xyTheta),
+  });
+
+  // Current VTA: elipsoid major axis along stim vector
+  const curVec = programaContatos ? dirUnitVector2D(programaContatos) : null;
+  const ampEf  = programaContatos && ampAtual ? calcAmpEfetiva(programaContatos, ampAtual) : 0;
+  const vtaR   = ampEf > 0 && pw > 0 ? kFactor * Math.sqrt(ampEf * pw) : 0;
+  // Ellipse: major = vtaR along stim dir, minor = vtaR * 0.65 perpendicular
+  const vtaMinor = vtaR * 0.65;
+
+  // Collect threshold markers: from marcadores + marcadoresRing + historicoRef
+  const threshMarkers = [];
+  const addMarker = (m, isHist) => {
+    if (!m || !m.config || !m.amp || !m.tipo) return;
+    const r_mm = kFactor * Math.sqrt((m.amp || 0) * (m.pw || pw || 60));
+    if (!isFinite(r_mm) || r_mm <= 0) return;
+    const c = parseConfigToContatos(m.config);
+    const vec = dirUnitVector2D(c);
+    if (!isFinite(vec.ux)) return;
+    const { rx, ry } = rotXY(vec.ux, vec.uy);
+    const isPos = POSITIVE_EFFECTS.has(m.tipo);
+    const struct = VTA_STRUCTURES[m.tipo] || VTA_STRUCTURES['Outros'];
+    const svgX = C + rx * mmToSvg(r_mm);
+    const svgY = C - ry * mmToSvg(r_mm);
+    if (!isFinite(svgX) || !isFinite(svgY)) return;
+    threshMarkers.push({ ...m, r_mm, svgX, svgY, isPos, struct, isHist });
+  };
+
+  if (showThresh) {
+    [...(marcadores || []), ...(marcadoresRing || [])].forEach(m => addMarker(m, false));
+  }
+  if (showHist) {
+    (historicoRef || []).forEach(m => addMarker(m, true));
+  }
+
+  // Grid rings in mm
+  const mmRings = [0.5, 1, 1.5, 2, 2.5, 3, 4, 5];
+
+  // Stim direction arrow for current program
+  let stimArrow = null;
+  if (curVec && vtaR > 0 && isFinite(curVec.ux)) {
+    const { rx, ry } = rotXY(curVec.ux, curVec.uy);
+    const ex = C + rx * mmToSvg(vtaR), ey = C - ry * mmToSvg(vtaR);
+    stimArrow = { rx, ry, ex, ey };
+  }
+
+  // VTA ellipse: rotated by stim direction
+  let vtaEllipseAngle = 0;
+  if (stimArrow) {
+    vtaEllipseAngle = Math.atan2(-stimArrow.ry, stimArrow.rx) * 180 / Math.PI;
+  }
+
+  const [showAtlas, setShowAtlas] = React.useState(false);
+  const [atlasTarget, setAtlasTarget] = React.useState('STN'); // STN | GPi | VIM
+
+  // Structure colors consistent with Python mapper
+  const STRUCT_COLORS = {
+    'bradicinesia': '#10b981', 'rigidez': '#06b6d4', 'tremor': '#3b82f6',
+    'Cápsula': '#f97316', 'Disartria': '#f43f5e', 'Parestesia': '#a78bfa', 'Outros': '#94a3b8',
+  };
+
+  return (
+    <div className="flex flex-col gap-1">
+      {/* Controls */}
+      <div className="flex items-center gap-2 flex-wrap px-0.5">
+        <div className="flex items-center gap-1">
+          <span className="text-[7px] text-slate-400 uppercase font-bold">k=</span>
+          <input type="range" min={0.1} max={0.9} step={0.05} value={kFactor}
+            onChange={e => setKFactor(parseFloat(e.target.value))}
+            className="w-16 h-1 accent-blue-500 cursor-pointer"/>
+          <span className="text-[7px] text-slate-500 w-8">{kFactor.toFixed(2)}</span>
+        </div>
+        <label className="flex items-center gap-0.5 cursor-pointer">
+          <input type="checkbox" checked={showThresh} onChange={e => setShowThresh(e.target.checked)} className="accent-slate-500 w-3 h-3"/>
+          <span className="text-[7px] text-slate-500">Limiares</span>
+        </label>
+        <label className="flex items-center gap-0.5 cursor-pointer">
+          <input type="checkbox" checked={showHist} onChange={e => setShowHist(e.target.checked)} className="accent-slate-400 w-3 h-3"/>
+          <span className="text-[7px] text-slate-400">Histórico</span>
+        </label>
+        {vtaR > 0 && (
+          <span className="text-[7px] font-mono text-blue-600 font-bold ml-auto">
+            VTA ≈ {vtaR.toFixed(1)}mm
+          </span>
+        )}
+      </div>
+
+      {/* Main SVG */}
+      <svg width={S} height={S} viewBox={`0 0 ${S} ${S}`}
+        className="rounded-xl border border-slate-200 bg-white">
+        {/* Background */}
+        <rect width={S} height={S} fill="#f8fafc" rx={10}/>
+
+        {/* mm rings */}
+        {mmRings.map(mm => {
+          const r = mmToSvg(mm);
+          const isMajor = mm === Math.floor(mm);
+          return (
+            <g key={mm}>
+              <circle cx={C} cy={C} r={r} fill="none"
+                stroke={isMajor ? '#cbd5e1' : '#e2e8f0'}
+                strokeWidth={isMajor ? 0.8 : 0.4}
+                strokeDasharray={isMajor ? undefined : '2,3'}/>
+              {isMajor && <text x={C + r + 2} y={C - 2}
+                fontSize={7} fill="#94a3b8">{mm}mm</text>}
+            </g>
+          );
+        })}
+
+        {/* Crosshairs */}
+        <line x1={12} y1={C} x2={S-12} y2={C} stroke="#e2e8f0" strokeWidth={0.5}/>
+        <line x1={C} y1={12} x2={C} y2={S-12} stroke="#e2e8f0" strokeWidth={0.5}/>
+
+        {/* Anterior indicator */}
+        <text x={C} y={S-6} textAnchor="middle" fontSize={7} fill="#94a3b8" fontStyle="italic">
+          ↓ {anteriorContact}
+        </text>
+
+        {/* VTA ellipse for current program */}
+        {vtaR > 0 && (
+          <g>
+            <ellipse cx={C} cy={C}
+              rx={mmToSvg(vtaR)} ry={mmToSvg(vtaMinor)}
+              fill="#3b82f6" fillOpacity={0.12}
+              stroke="#3b82f6" strokeWidth={1.5}
+              strokeDasharray="4,2"
+              transform={`rotate(${vtaEllipseAngle}, ${C}, ${C})`}/>
+            {/* Stim direction arrow */}
+            {stimArrow && (
+              <line x1={C} y1={C}
+                x2={stimArrow.ex} y2={stimArrow.ey}
+                stroke="#3b82f6" strokeWidth={1.5}
+                markerEnd="url(#vtaArrow)" opacity={0.7}/>
+            )}
+          </g>
+        )}
+
+        {/* Arrow marker def */}
+        <defs>
+          <marker id="vtaArrow" markerWidth={6} markerHeight={6} refX={5} refY={3} orient="auto">
+            <path d="M0,0 L6,3 L0,6 Z" fill="#3b82f6"/>
+          </marker>
+        </defs>
+
+        {/* Electrode center */}
+        <circle cx={C} cy={C} r={4} fill="#334155"/>
+        <circle cx={C} cy={C} r={2} fill="#94a3b8"/>
+
+        {/* Structural map peaks overlay */}
+        {structuralMap?.structures?.map((s, si) => {
+          const color = STRUCT_COLORS[s.tipo_efeito] || '#94a3b8';
+          const p = s.peak_mm;
+          const rawAngle = Math.atan2(p.y, p.x);
+          const { rx, ry } = rotXY(Math.cos(rawAngle), Math.sin(rawAngle));
+          const dist = Math.sqrt(p.x**2 + p.y**2);
+          if (!isFinite(dist) || dist <= 0) return null;
+          const sx = C + rx * mmToSvg(dist);
+          const sy = C - ry * mmToSvg(dist);
+          const opacity = Math.max(0.4, s.confidence);
+          return (
+            <g key={`smap-${si}`} opacity={opacity}>
+              <title>{s.name} — conf {Math.round(s.confidence*100)}% — r={dist.toFixed(1)}mm</title>
+              <circle cx={sx} cy={sy} r={mmToSvg(s.spread_mm || 0.5)}
+                fill={color} fillOpacity={0.15} stroke={color} strokeWidth={1.5} strokeDasharray="3,2"/>
+              <circle cx={sx} cy={sy} r={3} fill={color} opacity={0.9}/>
+              <text x={sx+5} y={sy-3} fontSize={6} fill={color} fontWeight="bold">{s.name.split(' ')[0]}</text>
+            </g>
+          );
+        })}
+
+        {/* Threshold / structure markers */}
+        {threshMarkers.map((m, mi) => {
+          const opacity = m.isHist
+            ? Math.max(0.3, opacidadeMarcador(m.sessionTimestamp || m.timestamp || 0, sessaoAtualTimestamp || Date.now()))
+            : 0.9;
+          const r = m.isHist ? 4 : 6;
+          return (
+            <g key={`vta-mk-${mi}`} opacity={opacity}>
+              <title>{m.tipo} — {m.r_mm.toFixed(1)}mm — {m.amp}mA/{m.pw||'?'}µs</title>
+              <circle cx={m.svgX} cy={m.svgY} r={r}
+                fill={m.struct.color} fillOpacity={m.isPos ? 0.3 : 0.15}
+                stroke={m.struct.color} strokeWidth={m.isHist ? 1 : 1.5}
+                strokeDasharray={m.isHist ? '2,2' : undefined}/>
+              {!m.isHist && (
+                <text x={m.svgX} y={m.svgY + 0.5} textAnchor="middle" dominantBaseline="middle"
+                  fontSize={5.5} fontWeight="bold" fill={m.struct.color}>{m.struct.label}</text>
+              )}
+              {/* Radial distance line from center */}
+              <line x1={C} y1={C} x2={m.svgX} y2={m.svgY}
+                stroke={m.struct.color} strokeWidth={0.5} opacity={0.3}
+                strokeDasharray="1,3"/>
+            </g>
+          );
+        })}
+      </svg>
+
+      {/* Structural map overlay from Python mapper */}
+      {structuralMap && structuralMap.structures && structuralMap.structures.length > 0 ? (
+        <div className="mt-1 px-0.5">
+          <p className="text-[7px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+            Mapa estrutural · {new Date(structuralMap.updated_at).toLocaleDateString('pt-BR')} · n={structuralMap.n_markers}
+          </p>
+          {structuralMap.structures.map((s, si) => {
+            const color = STRUCT_COLORS[s.tipo_efeito] || '#94a3b8';
+            const p = s.peak_mm;
+            const svgR = mmToSvg(Math.sqrt(p.x**2 + p.y**2));
+            // Project to XY plane using rotation
+            const rawAngle = Math.atan2(p.y, p.x);
+            const rotated = { rx: Math.cos(rawAngle + xyTheta - Math.PI/2),
+                               ry: Math.sin(rawAngle + xyTheta - Math.PI/2) };
+            if (!isFinite(svgR)) return null;
+            return (
+              <div key={si} className="flex items-center gap-1.5 mb-0.5">
+                <div className="w-2 h-2 rounded-full shrink-0" style={{background:color}}/>
+                <span className="text-[8px] font-bold" style={{color}}>
+                  {s.is_positive ? '✓' : '✗'} {s.name}
+                </span>
+                <span className="text-[7px] text-slate-400 font-mono">
+                  r={Math.sqrt(p.x**2+p.y**2).toFixed(1)}mm conf={Math.round(s.confidence*100)}%
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="mt-1 px-0.5 py-1.5 bg-amber-50 border border-amber-200 rounded-lg">
+          <p className="text-[8px] text-amber-700 font-bold">⚠ Sem mapa estrutural calculado</p>
+          <p className="text-[7px] text-amber-600 mt-0.5">
+            Execute o script Python <code className="bg-amber-100 px-0.5 rounded">run_patient.py</code> para gerar o mapeamento probabilístico.
+          </p>
+        </div>
+      )}
+
+      {/* Atlas toggle */}
+      <div className="flex items-center gap-1.5 mt-1 px-0.5">
+        <button onClick={() => setShowAtlas(v => !v)}
+          className={`text-[8px] font-bold px-2 py-0.5 rounded border transition-all ${showAtlas ? 'bg-slate-700 text-white border-slate-600' : 'bg-slate-100 border-slate-200 text-slate-500 hover:border-slate-400'}`}>
+          🧠 Atlas
+        </button>
+        {showAtlas && ['STN','GPi','VIM'].map(t => (
+          <button key={t} onClick={() => setAtlasTarget(t)}
+            className={`text-[7px] font-bold px-1.5 py-0.5 rounded border transition-all ${atlasTarget===t ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-slate-50 border-slate-200 text-slate-400 hover:border-indigo-300'}`}>{t}</button>
+        ))}
+      </div>
+
+      {/* Atlas panels — 3 planes */}
+      {showAtlas && <AtlasPanel target={atlasTarget} S={S} C={C} mmToSvg={mmToSvg} anteriorContact={anteriorContact} />}
+
+      {/* Legend */}
+      <div className="flex flex-wrap gap-1.5 px-0.5">
+        <div className="flex items-center gap-0.5">
+          <div className="w-3 h-3 rounded-full bg-blue-500 opacity-50 border border-blue-500"/>
+          <span className="text-[7px] text-slate-500">VTA atual</span>
+        </div>
+        {Object.entries(VTA_STRUCTURES).slice(0,4).map(([k,v]) => (
+          <div key={k} className="flex items-center gap-0.5">
+            <div className="w-2 h-2 rounded-full" style={{background: v.color}}/>
+            <span className="text-[7px] text-slate-400">{v.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, isAmplitude, historicoRef, marcadores, marcadoresRing, marcadoresTodosL, historicoTodos, structuralMap, sessaoAtualTimestamp, tipoEletrodo, programaContatos }) => {
+  const [agruparPorFreq, setAgruparPorFreq] = React.useState(false);
   const [anteriorContact, setAnteriorContact] = React.useState('A');
   const [fullscreenDisplay, setFullscreenDisplay] = React.useState(null); // {tipo, grpKey}
   // modoVis: 'auto' | '3d' | 'timeline'
@@ -919,9 +1365,10 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, is
           {/* Visualization mode selector */}
           <div className="flex items-center gap-0.5 border border-slate-200 rounded overflow-hidden">
             {[
-              ['auto', 'Auto', 'Modo automático (baseado no tipo de estimulação)'],
-              ['3d',   '⬡ 3D', 'Visão 3D com todos os marcadores de qualquer contato'],
-              ['timeline', '📈 TL', 'Timeline com filtro de contatos exatos'],
+              ['auto',     'Auto',   'Modo automático (baseado no tipo de estimulação)'],
+              ['3d',       '⬡ 3D',   'Visão 3D com todos os marcadores de qualquer contato'],
+              ['timeline', '📈 TL',  'Timeline com filtro de contatos exatos'],
+              ['vta',      '🔵 VTA', 'Campo elétrico estimado em mm (modelo analítico)'],
             ].map(([mode, label, title]) => (
               <button key={mode} onClick={() => setModoVis(mode)} title={title}
                 className={`text-[7px] font-bold px-1.5 py-0.5 transition-all ${
@@ -961,7 +1408,27 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, is
       // Which component to render
       const efectiveMode = modoVis === 'auto' ? stimType
         : modoVis === '3d'       ? 'multi-dir'
+        : modoVis === 'vta'      ? 'vta'
         : /* timeline */           'timeline';
+
+      // Infer current PW from historicoRef or fall back to 60µs
+      const currentPw = (historicoRef && historicoRef[0]?.pw) || 60;
+
+      if (efectiveMode === 'vta') {
+        const allThreshMarkers = [...(marcadoresTodosL || marcadores), ...(marcadoresRing || [])];
+        return <>{toggleBar}<VTAView
+          programaContatos={programaContatos}
+          ampAtual={valor}
+          pw={currentPw}
+          marcadores={allThreshMarkers}
+          marcadoresRing={[]}
+          historicoRef={historicoTodos || historicoRef}
+          anteriorContact={anteriorContact}
+          tipoEletrodo={tipoEletrodo}
+          sessaoAtualTimestamp={sessaoAtualTimestamp}
+          structuralMap={structuralMap}
+        /></>;
+      }
 
       if (efectiveMode === 'single-dir') {
         return <>{toggleBar}<DirectionalHistorico marcadores={marcadoresDisplay} historicoRef={historicoDisplay} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} onOpenFullscreen={(grpKey) => setFullscreenDisplay({tipo:'single', grpKey})}/></>;
@@ -981,7 +1448,13 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, is
             <h3 className="text-sm font-bold text-slate-700">Visualização ampliada — {label}</h3>
             <button onClick={() => setFullscreenDisplay(null)} className="text-slate-400 hover:text-slate-700 text-2xl font-bold leading-none">×</button>
           </div>
-          {fullscreenDisplay.tipo === 'single'
+          {fullscreenDisplay.tipo === 'vta'
+            ? <VTAView programaContatos={programaContatos} ampAtual={valor} pw={currentPw}
+                marcadores={marcadoresTodosL||marcadores} marcadoresRing={[]}
+                historicoRef={historicoTodos||historicoRef} anteriorContact={anteriorContact}
+                tipoEletrodo={tipoEletrodo} sessaoAtualTimestamp={sessaoAtualTimestamp}
+                forcedSize={520}/>
+            : fullscreenDisplay.tipo === 'single'
             ? <DirectionalHistorico marcadores={marcadores} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} forcedSize={520}/>
             : <TripleView3D marcadores={marcadores} marcadoresRing={marcadoresRing} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} forcedSize={460}/>
           }

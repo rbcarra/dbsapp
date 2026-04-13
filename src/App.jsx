@@ -69,6 +69,8 @@ export default function App() {
   const [showHistoricoText, setShowHistoricoText] = useState(false);
   const [showUPDRS, setShowUPDRS] = useState(false);
   const [showScales, setShowScales] = useState(false);
+  const [structuralMapL, setStructuralMapL] = useState(null);
+  const [structuralMapR, setStructuralMapR] = useState(null);
   const [autoSaveStatus, setAutoSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
   // Helper: cap programs to max 2 per side in any dadosGrupos object
   const capPrograms = (grupos) => {
@@ -206,6 +208,22 @@ export default function App() {
     };
     fetchTemp();
   }, [user, activePatient]);
+
+  // Load structural map from Python mapper when active patient changes
+  useEffect(() => {
+    if (!user || !activePatient) {
+      setStructuralMapL(null); setStructuralMapR(null); return;
+    }
+    const base = `artifacts/${appId}/users/${user.uid}/patients/${activePatient.id}/structural_map`;
+    Promise.all([
+      getDoc(doc(db, base, 'L')).catch(() => null),
+      getDoc(doc(db, base, 'R')).catch(() => null),
+    ]).then(([lDoc, rDoc]) => {
+      setStructuralMapL(lDoc?.exists() ? lDoc.data() : null);
+      setStructuralMapR(rDoc?.exists() ? rDoc.data() : null);
+    }).catch(e => console.error('structural_map load error:', e));
+  }, [user, activePatient]);
+
 
   useEffect(() => {
     if (!user || !activePatient || isInitializing || showLoginModal) return;
@@ -1545,6 +1563,7 @@ ${progTexto}Avaliação: ${textoEfeito}
                         marcadoresRing={marcadoresHistoricos.L.concat(marcadoresClinicosL)}
                         marcadoresTodosL={marcadoresTodosL}
                         historicoTodos={historicoTodosL}
+                        structuralMap={structuralMapL}
                         configStr={configStr}
                         onAdicionarMarcador={(tipo) => adicionarMarcadorClinico('L', tipo, idx)}
                         onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('L', cfg)}
@@ -1609,6 +1628,7 @@ ${progTexto}Avaliação: ${textoEfeito}
                         marcadoresRing={marcadoresRingR}
                         marcadoresTodosL={marcadoresTodosR}
                         historicoTodos={historicoTodosR}
+                        structuralMap={structuralMapR}
                         configStr={configStr}
                         onAdicionarMarcador={(tipo) => adicionarMarcadorClinico('R', tipo, idx)}
                         onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('R', cfg)}
