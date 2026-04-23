@@ -36,6 +36,63 @@ const getParam = (seg, unitPatterns) => {
 };
 
 // Longest run of 0/+/- -- Correção 3: ignorar 5º símbolo (case marker)
+// ─── POSITIONAL PERCENT CONTACT PARSER ──────────────────────────────────────
+// Handles the extended positional notation where each position (0,1,2,3) is either:
+//   0           → off
+//   -           → cathode 100%
+//   +           → anode 100%
+//   -(N%)       → cathode N%
+//   +(N%)       → anode N%
+//
+// Examples:
+//   "0-(30%)-(70%)0"       → contact1: cathode 30%, contact2: cathode 70%
+//   "-(30%)0-(70%)0"       → contact0: cathode 30%, contact2: cathode 70%
+//   "-(20%)-(20%)-(20%)-(30%)" → contacts 0-2: cathode 20% each, contact3: cathode 30%
+//
+// Fully compatible with standard notation: "--0+" still handled by extractContacts
+
+const parsePositionalPercentContacts = (seg) => {
+  // Only activate if the segment contains at least one parenthesised percentage
+  if (!(/[+\-]\(\d+%?\)/.test(seg))) return null;
+
+  // Strip everything after the first amplitude/param marker to isolate contact portion
+  const contactPart = seg
+    .replace(/\d+[.,]\d*\s*(m[aA]|[Vv](?![a-zA-Z])|[Hh]z|pw|µs|ms|us).*$/i, '')
+    .trim();
+
+  // Tokenise: each token is one of: -(N%), +(N%), -, +, 0
+  const tokenRe = /([+\-]\(\d+%?\)|[+\-]|0)/g;
+  const tokens = [];
+  let m;
+  while ((m = tokenRe.exec(contactPart)) !== null) {
+    tokens.push(m[1]);
+  }
+
+  // Must have 2–4 tokens and at least one parens token
+  if (tokens.length < 2 || tokens.length > 4) return null;
+  if (!tokens.some(t => /\(/.test(t))) return null;
+
+  // Build contact object: ring keys '0','1','2','3'
+  const contatos = {};
+  ['0','1','2','3'].forEach(k => { contatos[k] = { state: 'off', perc: 100 }; });
+
+  tokens.forEach((tok, i) => {
+    if (i > 3) return;
+    const key = String(i);
+    if (tok === '0') return; // off — stays default
+    const percMatch = tok.match(/([+\-])\((\d+)%?\)/);
+    if (percMatch) {
+      contatos[key] = { state: percMatch[1], perc: parseInt(percMatch[2]) };
+    } else if (tok === '-' || tok === '+') {
+      contatos[key] = { state: tok, perc: 100 };
+    }
+  });
+
+  // Must have at least one active contact
+  if (!Object.values(contatos).some(v => v.state !== 'off')) return null;
+  return contatos;
+};
+
 const extractContacts = (seg) => {
   // Strip spaces between contact symbols so "+0 - -" → "+0--"
   const spaceStripped = seg.replace(/([0+\-])\s+(?=[0+\-])/g, '$1');
@@ -93,7 +150,9 @@ const parseParams = (seg) => {
     }
   }
 
-  return { contatos: extractContacts(seg), amp, pw: resolvedPw, freq: resolvedFreq, impedancia };
+  // Try positional percent format first (e.g. "0-(30%)-(70%)0"), fall back to standard
+  const contatosResult = parsePositionalPercentContacts(seg) || extractContacts(seg);
+  return { contatos: contatosResult, amp, pw: resolvedPw, freq: resolvedFreq, impedancia };
 };
 
 // ─── BATTERY + IMPEDANCE EXTRACTION ─────────────────────────────────────
@@ -188,6 +247,9 @@ const splitContactsFromParams = (line) => {
     if (/m[aA]|[Vv]/.test(p.unit || '')) { ampVal = p.val; firstParamStart = p.idx; break; }
     if (/ms|pw|µs|us|[Hh]z/.test(p.unit || '')) { firstParamStart = p.idx; break; }
     if (!p.unit && p.val >= 0.5 && p.val <= 10 && i+1 < paramNums.length) {
+      // Don't treat "2-" or "3+" as amplitude: if the char right after the digit is a sign, skip
+      const charAfter = line[p.idx + String(p.val).replace('.',',').length] || '';
+      if (charAfter === '-' || charAfter === '+') continue; // it's a contact, not amplitude
       ampVal = p.val; firstParamStart = p.idx; break;
     }
   }
@@ -227,12 +289,13 @@ const parseNamedContactLine = (line, tipoEl = '4-ring') => {
 
   // Tokenize the contactSpec into segments split by +
   // Each segment is either: [LR]N[letter]? [perc]% or [letter][perc]%
-  // Also treat "L3 30% L4 70%" (space-separated same-letter pairs) as + splits
-  // Normalize: insert '+' between adjacent "[LR]N perc%" tokens
-  const normalizedSpec = contactSpec.replace(
-    /([LRlr]\d(?:[ABCabc])?(?:\s+\d+%)?\s+(?=[LRlr]\d))/g,
-    m => m.trimEnd() + ' + '
-  );
+  // Normalize: insert '+' between adjacent contact tokens
+  // Handles: "L3 30% L4 70%", "2- 30% 3- 70%", "R3 30% R4 70%"
+  const normalizedSpec = contactSpec
+    // "L3 30% L4 70%" → "L3 30% + L4 70%"  (named contacts, L/R required in lookahead)
+    .replace(/([LRlr]\d(?:[ABCabc])?(?:\s+\d+%)?)\s+(?=[LRlr]\d)/g, m => m.trimEnd() + ' + ')
+    // "2- 30% 3- 70%" → "2- 30% + 3- 70%"  (direct index contacts)
+    .replace(/(\d+[\-+](?:\s+\d+%)?)\s+(?=\d+[\-+])/g, m => m.trimEnd() + ' + ');
   const segments = normalizedSpec.split(/\s*\+\s*/);
   let lastLvIdx = 0;
 
@@ -280,6 +343,37 @@ const parseNamedContactLine = (line, tipoEl = '4-ring') => {
       lastLvIdx = Math.max(0, Math.min(3, parseInt(refSplit[2]) - 1));
       if (refs.length > 0) refs[refs.length-1].perc = parseInt(refSplit[3]);
       refs.push({ lvIdx: lastLvIdx, letter: null, perc: parseInt(refSplit[4]), isAnode: signPfx2 === '+' });
+      continue;
+    }
+
+    // DIRECT INDEX FORMAT: "2- 30%", "3+ 70%", "0- 50%" (bare digit + sign + optional perc)
+    const directIdx = segTrim.match(/^(\d+)([\-+])\s*(\d+)?%?$/);
+    if (directIdx) {
+      const lvIdx = Math.max(0, Math.min(3, parseInt(directIdx[1])));
+      const isAnode = directIdx[2] === '+';
+      const perc = directIdx[3] ? parseInt(directIdx[3]) : null;
+      refs.push({ lvIdx, letter: null, perc, isAnode });
+      lastLvIdx = lvIdx;
+      continue;
+    }
+
+    // PARENS SPLIT FORMAT: "00-(30%)-(70%)" → contacts at lv1 and lv2 with split percentages
+    // Note: "00-(30%)-(70%)" = R2 (30%) + R3 (70%) in this programmer's interface notation
+    // When both digits are the same (e.g. "00"), the first maps to contact 2, second to contact 3
+    const parensSplit = segTrim.match(/^(\d)(\d)[-\s]*\((\d+)%\)[-\s]*\((\d+)%\)$/)
+      || segTrim.match(/^(\d)[-\s]*\((\d+)%\)(\d)?[-\s]*\((\d+)%\)$/);
+    if (parensSplit) {
+      let lv1 = Math.max(0, Math.min(3, parseInt(parensSplit[1])));
+      const p1  = parseInt(parensSplit[2]);
+      let lv2 = parensSplit[3] !== undefined ? Math.max(0, Math.min(3, parseInt(parensSplit[3]))) : lv1 + 1;
+      const p2  = parseInt(parensSplit[4]);
+      // Special case: "00" → contacts 2 and 3 (programmer interface notation for this device)
+      if (lv1 === 0 && lv2 === 0) { lv1 = 2; lv2 = 3; }
+      // General: if same contact twice, make them adjacent
+      else if (lv1 === lv2) { lv2 = Math.min(3, lv1 + 1); }
+      refs.push({ lvIdx: lv1, letter: null, perc: p1, isAnode: false });
+      refs.push({ lvIdx: lv2, letter: null, perc: p2, isAnode: false });
+      lastLvIdx = lv2;
       continue;
     }
   }
