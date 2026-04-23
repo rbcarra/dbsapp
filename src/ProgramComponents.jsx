@@ -147,24 +147,38 @@ const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, o
         </div>
       </div>
 
-      <div className="p-4 flex flex-col gap-4 flex-1">
-        <div className="w-full flex justify-center">
+      <div className={`p-4 flex gap-4 flex-1 ${isInterleaving ? 'flex-col' : 'flex-row items-start'}`}>
+        {/* Electrode visualizer */}
+        <div className={isInterleaving ? "w-full flex justify-center" : "flex flex-col items-center gap-3 shrink-0"}>
           <VisualizadorEletrodo 
             lado={lado} tipoEletrodo={tipoEletrodo} contatos={programa.contatos} 
             onChangeState={(k, s) => onUpdateState(lado, index, k, s)}
             onChangePerc={(k, p) => onUpdatePerc(lado, index, k, p)}
           />
+          {/* Impedância moves under electrode when wide */}
+          {!isInterleaving && (
+            <div className="flex flex-col gap-1 w-full max-w-[180px]">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Impedância</label>
+              <input
+                type="text" value={impedancia} onChange={e => onImpedanciaChange(e.target.value)}
+                placeholder="Ex: 1200 Ω"
+                className="px-2 py-1 text-xs bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-indigo-400 font-mono"
+              />
+            </div>
+          )}
         </div>
 
-        {/* Item 6: Impedância */}
-        <div className="flex flex-col gap-1">
-          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Impedância da Terapia</label>
-          <input
-            type="text" value={impedancia} onChange={e => onImpedanciaChange(e.target.value)}
-            placeholder="Ex: 1200 Ω"
-            className="px-2 py-1 text-xs bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-indigo-400 font-mono"
-          />
-        </div>
+        {/* Item 6: Impedância — only shown in narrow/interleaving mode */}
+        {isInterleaving && (
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Impedância da Terapia</label>
+            <input
+              type="text" value={impedancia} onChange={e => onImpedanciaChange(e.target.value)}
+              placeholder="Ex: 1200 Ω"
+              className="px-2 py-1 text-xs bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-indigo-400 font-mono"
+            />
+          </div>
+        )}
 
         <div className="w-full flex flex-col justify-center flex-1">
           <ControleParametro 

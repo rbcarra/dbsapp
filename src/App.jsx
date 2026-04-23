@@ -1515,8 +1515,10 @@ ${progTexto}Avaliação: ${textoEfeito}
             <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col shrink-0">
               <div className="flex justify-between items-center mb-3 px-2 border-b pb-2">
                 <h2 className="font-bold text-slate-700">Hemisfério Esquerdo</h2>
-                <button onClick={() => toggleInterleaving('L')} className={`text-xs font-bold px-3 py-1 rounded-full transition-colors ml-4 ${programasL.length > 1 ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
-                  {programasL.length > 1 ? 'Desativar Interleaving' : '+ Ativar Interleaving'}
+                <button onClick={() => toggleInterleaving('L')}
+                  className={`text-xs font-bold px-3 py-1 rounded-full transition-colors ml-auto ${programasL.length > 1 ? 'bg-indigo-100 text-indigo-700 hover:bg-rose-100 hover:text-rose-700' : 'bg-slate-100 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600'}`}
+                  title={programasL.length > 1 ? 'Desativar interleaving — volta à visão ampliada' : 'Ativar interleaving — modo duplo programa'}>
+                  {programasL.length > 1 ? '⇄ Interleaving ativo' : '+ Interleaving'}
                 </button>
               </div>
               <div className="flex gap-4 flex-1">
@@ -1555,7 +1557,7 @@ ${progTexto}Avaliação: ${textoEfeito}
                   // ALL sessions for 3D historicoRef (no config filter)
                   const historicoTodosL = historicoReal.filter(h => h.lado === 'L');
                           return (
-                    <div key={`L-${idx}`} className="w-[340px] shrink-0">
+                    <div key={`L-${idx}`} className={`${programasL.length > 1 ? "w-[340px]" : "w-[680px]"} shrink-0`}>
                       <RenderPrograma
                         lado="L" programa={prog} index={idx} isInterleaving={programasL.length > 1} tipoEletrodo={tipoEletrodo}
                         isMatchExato={isMatch} historicoRef={hist}
@@ -1582,8 +1584,10 @@ ${progTexto}Avaliação: ${textoEfeito}
             <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col shrink-0">
               <div className="flex justify-between items-center mb-3 px-2 border-b pb-2">
                 <h2 className="font-bold text-slate-700">Hemisfério Direito</h2>
-                <button onClick={() => toggleInterleaving('R')} className={`text-xs font-bold px-3 py-1 rounded-full transition-colors ml-4 ${programasR.length > 1 ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
-                  {programasR.length > 1 ? 'Desativar Interleaving' : '+ Ativar Interleaving'}
+                <button onClick={() => toggleInterleaving('R')}
+                  className={`text-xs font-bold px-3 py-1 rounded-full transition-colors ml-auto ${programasR.length > 1 ? 'bg-indigo-100 text-indigo-700 hover:bg-rose-100 hover:text-rose-700' : 'bg-slate-100 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600'}`}
+                  title={programasR.length > 1 ? 'Desativar interleaving — volta à visão ampliada' : 'Ativar interleaving — modo duplo programa'}>
+                  {programasR.length > 1 ? '⇄ Interleaving ativo' : '+ Interleaving'}
                 </button>
               </div>
               <div className="flex gap-4 flex-1">
@@ -1620,7 +1624,7 @@ ${progTexto}Avaliação: ${textoEfeito}
                   const historicoTodosR = historicoReal.filter(h => h.lado === 'R');
                   const marcadoresRingR = marcadoresClinicosR.concat(marcadoresHistoricos.R.filter(m => !marcadoresClinicosR.some(mc2=>mc2.id===m.id)));
                   return (
-                    <div key={`R-${idx}`} className="w-[340px] shrink-0">
+                    <div key={`R-${idx}`} className={`${programasR.length > 1 ? "w-[340px]" : "w-[680px]"} shrink-0`}>
                       <RenderPrograma
                         lado="R" programa={prog} index={idx} isInterleaving={programasR.length > 1} tipoEletrodo={tipoEletrodo}
                         isMatchExato={isMatch} historicoRef={hist}
