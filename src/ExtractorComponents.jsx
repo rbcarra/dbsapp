@@ -227,7 +227,13 @@ const parseNamedContactLine = (line, tipoEl = '4-ring') => {
 
   // Tokenize the contactSpec into segments split by +
   // Each segment is either: [LR]N[letter]? [perc]% or [letter][perc]%
-  const segments = contactSpec.split(/\s*\+\s*/);
+  // Also treat "L3 30% L4 70%" (space-separated same-letter pairs) as + splits
+  // Normalize: insert '+' between adjacent "[LR]N perc%" tokens
+  const normalizedSpec = contactSpec.replace(
+    /([LRlr]\d(?:[ABCabc])?(?:\s+\d+%)?\s+(?=[LRlr]\d))/g,
+    m => m.trimEnd() + ' + '
+  );
+  const segments = normalizedSpec.split(/\s*\+\s*/);
   let lastLvIdx = 0;
 
   for (const seg of segments) {
@@ -374,11 +380,38 @@ const parseProgramming = (rawText, tipoEletrodo = '4-ring') => {
     const m3 = line.match(/^\(([EDLRedlr]\d*)\)\s*[:](.*)/i);
     if (m3) { push(currentGroup, parseSide(m3[1]), parseParams(m3[2]||line)); continue; }
 
-    // "ESQ ...", "DIR ..."
-    const mEsqDir = line.match(/^(ESQ|DIR|ESQUERDO|DIREITO)\s+(.+)/i);
+    // Guard helper: line must contain an amplitude-like value to be treated as programming
+    const hasAmpInLine = (s) =>
+      /[\d][\d.,]*\s*(?:m[aA]|[Vv](?![A-Za-z])|[µu]s|ms(?![a-zA-Z])|pw(?![a-zA-Z])|[Hh]z)/.test(s);
+
+    // "ESQ ...", "DIR ...", "E -> ...", "D -> ..." — explicit known prefixes (no amp guard needed)
+    // Generic: any prefix ending in E/L (left) or D/R (right) before separator,
+    //          only if the rest of the line contains an amplitude value
+    const mEsqDir = line.match(/^(ESQ|DIR|ESQUERDO|DIREITO)\s+(.+)/i)
+      || line.match(/^([ED])\s*->?\s*(.+)/i)
+      || (hasAmpInLine(line) && (
+           line.match(/^([A-Za-z]*[EeLl])\s*[:\-]\s*(.+)/i)   // ends in E or L → left
+        || line.match(/^([A-Za-z]*[DdRr])\s*[:\-]\s*(.+)/i)   // ends in D or R → right
+      ));
     if (mEsqDir) {
-      const side = /^(ESQ|ESQUERDO)/i.test(mEsqDir[1]) ? 'L' : 'R';
-      push(currentGroup, side, parseParams(mEsqDir[2])); continue;
+      const firstChar = mEsqDir[1].toUpperCase();
+      // Ends in E or L → left; ends in D or R → right
+      const lastChar = firstChar.slice(-1);
+      const side = (lastChar === 'E' || lastChar === 'L') ? 'L' : 'R';
+      const rest = (mEsqDir[2] || '').trim();
+      // Try named contact parser first (e.g. "L4 1,6mA" or "L3 30% L4 70% 3,0mA")
+      if (/^[LRlr]?\d/.test(rest.trim())) {
+        // Named contact format — build a fake "L" or "R" prefix based on side
+        const fakePrefix = side === 'L' ? 'L' : 'R';
+        // Replace any leading L/R with the correct side prefix
+        const normalized = rest.trim().replace(/^[LRlr](\d)/i, fakePrefix + '$1');
+        const nc = parseNamedContactLine(normalized, tipoEletrodo);
+        if (nc && (nc.amp > 0 || nc.pw || nc.freq)) {
+          push(currentGroup, side, { contatos: nc.contatos, amp: nc.amp, pw: nc.pw, freq: nc.freq });
+          continue;
+        }
+      }
+      push(currentGroup, side, parseParams(rest)); continue;
     }
 
     // "E 0-00 2,8mA..." ou "D: 0-00 ..." sem palavra "Lead"
@@ -802,11 +835,10 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
     }
     const progText = progStartIdx >= 0 ? lines.slice(progStartIdx).join('\n').trim() : '';
 
-    // 3. Evolution: everything between first date line and prog block, excluding header (first 2 lines)
+    // 3. Evolution: full text of the consultation (including programming section)
     const dateLineIdx = dateLine ? lines.findIndex(l => l.includes(dateLine.slice(0,10))) : 0;
     const evoStart = Math.max(dateLineIdx + 1, 1);
-    const evoEnd   = progStartIdx > 0 ? progStartIdx : lines.length;
-    const evolution = lines.slice(evoStart, evoEnd).join('\n').trim();
+    const evolution = lines.slice(evoStart).join('\n').trim();
 
     setCaptured(prev => ({
       ...prev,
@@ -852,8 +884,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
         const progText = progStartIdx >= 0 ? lines.slice(progStartIdx).join('\n').trim() : '';
         const dateLineIdx = dateLine ? lines.findIndex(l => l.includes(dateLine.slice(0,10))) : 0;
         const evoStart = Math.max(dateLineIdx + 1, 1);
-        const evoEnd   = progStartIdx > 0 ? progStartIdx : lines.length;
-        const evolution = lines.slice(evoStart, evoEnd).join('\n').trim();
+        const evolution = lines.slice(evoStart).join('\n').trim();
         return {
           ...prev,
           [consultIdx]: { date: dateLine, evolution, programming: progText, efeitosGrupos: {} }
@@ -1454,13 +1485,21 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                   ))}
                 </div>
               </div>
-              <button onClick={nextConsult}
-                className="w-full bg-emerald-500 hover:bg-emerald-400 text-white font-black py-2.5 rounded-lg text-sm transition-all shadow-md">
-                {consultIdx<consultations.length-1
-                  ?`Próxima consulta (${consultIdx+2}/${consultations.length}) →`
-                  :'Concluir e Revisar →'}
-              </button>
-              <p className="text-[9px] text-slate-600 text-center">Enter confirma campos obrigatórios · Limiares: selecione e clique no botão</p>
+              <div className="flex gap-2">
+                {consultIdx > 0 && (
+                  <button onClick={() => { setConsultIdx(c => c - 1); setFieldIdx(0); setLastCapture(''); }}
+                    className="flex-none bg-slate-700 hover:bg-slate-600 text-white font-black px-4 py-2.5 rounded-lg text-sm transition-all">
+                    ← Anterior
+                  </button>
+                )}
+                <button onClick={nextConsult}
+                  className="flex-1 bg-emerald-500 hover:bg-emerald-400 text-white font-black py-2.5 rounded-lg text-sm transition-all shadow-md">
+                  {consultIdx<consultations.length-1
+                    ?`Próxima (${consultIdx+2}/${consultations.length}) →`
+                    :'Concluir e Revisar →'}
+                </button>
+              </div>
+              <p className="text-[9px] text-slate-600 text-center">Enter confirma campos obrigatórios · ← Anterior relê dados já capturados</p>
             </div>
           </div>
         </div>
