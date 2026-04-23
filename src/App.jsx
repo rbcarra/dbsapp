@@ -1385,6 +1385,65 @@ ${progTexto}Avaliação: ${textoEfeito}
 
       <main className="p-4 w-full flex-1 flex flex-col gap-3 overflow-y-auto">
 
+        
+        {/* BLOCO: PRONTUÁRIO — compact evolution-first layout */}
+        <BlocoColapsavel
+          titulo="Evolução"
+          aberto={blocosAbertos.prontuario}
+          onToggle={() => toggleBloco('prontuario')}
+        >
+          {/* Header line: session title + battery */}
+          <div className="flex items-center gap-2 mb-2">
+            <input type="text" value={resumoSessao} onChange={e => setResumoSessao(e.target.value)}
+              placeholder={`Resumo: Digite aqui em poucas palavras a impressão geral ou ocorrência mais importante dessa consulta`}
+              className="flex-1 px-3 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 font-medium" />
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="text-[10px] text-slate-400 font-bold">🔋</span>
+              <input type="text" value={voltagemBateria} onChange={e => setVoltagemBateria(e.target.value)}
+                placeholder="V"
+                className="w-20 px-2 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono text-slate-700 text-center" />
+            </div>
+          </div>
+          {/* Auto-expanding evolution textarea */}
+          <textarea
+            value={notasLivres}
+            onChange={(e) => {
+              setNotasLivres(e.target.value);
+              e.target.style.height = 'auto';
+              e.target.style.height = Math.max(60, e.target.scrollHeight) + 'px';
+            }}
+            onFocus={(e) => { e.target.style.height = 'auto'; e.target.style.height = Math.max(60, e.target.scrollHeight) + 'px'; }}
+            placeholder="Cole ou registre aqui a evolução do paciente..."
+            rows={2}
+            style={{ minHeight: '60px', height: notasLivres ? 'auto' : '60px' }}
+            className="w-full p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none text-slate-700 leading-relaxed overflow-hidden"
+          />
+          <div className="flex items-center justify-between mt-2">
+            <div className="flex items-center gap-2">
+              <button onClick={() => setShowHistoricoText(true)}
+                className="flex items-center gap-1.5 text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg font-bold transition-all border border-slate-200"
+                title="Ver histórico completo de programação em texto">
+                📜 Histórico
+              </button>
+              <button onClick={() => setShowUPDRS(true)}
+                className="flex items-center gap-1.5 text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-3 py-1.5 rounded-lg font-bold transition-all border border-teal-200"
+                title="Abrir pontuação MDS-UPDRS Parte III">
+                📊 UPDRS-III
+              </button>
+              <button onClick={() => setShowScales(true)}
+                className="flex items-center gap-1.5 text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg font-bold transition-all border border-indigo-200"
+                title="Escalas clínicas: BFM, SARA, PDQ, YGTSS, Exame Parkinsoniano">
+                📐 Escalas
+              </button>
+            </div>
+            <button onClick={copiarConsultaClipboard}
+              className="flex items-center gap-1.5 text-xs bg-slate-700 hover:bg-slate-900 text-white px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm"
+              title="Copia cabeçalho, evolução e programação atual para colar no prontuário">
+              📋 Copiar Consulta
+            </button>
+          </div>
+        </BlocoColapsavel>
+
         {/* BLOCO: PROGRAMAÇÃO ANTERIOR */}
         <BlocoColapsavel
           titulo="Programação Anterior"
@@ -1646,64 +1705,6 @@ ${progTexto}Avaliação: ${textoEfeito}
                 })}
               </div>
             </div>
-          </div>
-        </BlocoColapsavel>
-
-        {/* BLOCO: PRONTUÁRIO — compact evolution-first layout */}
-        <BlocoColapsavel
-          titulo="Evolução"
-          aberto={blocosAbertos.prontuario}
-          onToggle={() => toggleBloco('prontuario')}
-        >
-          {/* Header line: session title + battery */}
-          <div className="flex items-center gap-2 mb-2">
-            <input type="text" value={resumoSessao} onChange={e => setResumoSessao(e.target.value)}
-              placeholder={`Resumo: Digite aqui em poucas palavras a impressão geral ou ocorrência mais importante dessa consulta`}
-              className="flex-1 px-3 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 font-medium" />
-            <div className="flex items-center gap-1.5 shrink-0">
-              <span className="text-[10px] text-slate-400 font-bold">🔋</span>
-              <input type="text" value={voltagemBateria} onChange={e => setVoltagemBateria(e.target.value)}
-                placeholder="V"
-                className="w-20 px-2 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono text-slate-700 text-center" />
-            </div>
-          </div>
-          {/* Auto-expanding evolution textarea */}
-          <textarea
-            value={notasLivres}
-            onChange={(e) => {
-              setNotasLivres(e.target.value);
-              e.target.style.height = 'auto';
-              e.target.style.height = Math.max(60, e.target.scrollHeight) + 'px';
-            }}
-            onFocus={(e) => { e.target.style.height = 'auto'; e.target.style.height = Math.max(60, e.target.scrollHeight) + 'px'; }}
-            placeholder="Cole ou registre aqui a evolução do paciente..."
-            rows={2}
-            style={{ minHeight: '60px', height: notasLivres ? 'auto' : '60px' }}
-            className="w-full p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none text-slate-700 leading-relaxed overflow-hidden"
-          />
-          <div className="flex items-center justify-between mt-2">
-            <div className="flex items-center gap-2">
-              <button onClick={() => setShowHistoricoText(true)}
-                className="flex items-center gap-1.5 text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg font-bold transition-all border border-slate-200"
-                title="Ver histórico completo de programação em texto">
-                📜 Histórico
-              </button>
-              <button onClick={() => setShowUPDRS(true)}
-                className="flex items-center gap-1.5 text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-3 py-1.5 rounded-lg font-bold transition-all border border-teal-200"
-                title="Abrir pontuação MDS-UPDRS Parte III">
-                📊 UPDRS-III
-              </button>
-              <button onClick={() => setShowScales(true)}
-                className="flex items-center gap-1.5 text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg font-bold transition-all border border-indigo-200"
-                title="Escalas clínicas: BFM, SARA, PDQ, YGTSS, Exame Parkinsoniano">
-                📐 Escalas
-              </button>
-            </div>
-            <button onClick={copiarConsultaClipboard}
-              className="flex items-center gap-1.5 text-xs bg-slate-700 hover:bg-slate-900 text-white px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm"
-              title="Copia cabeçalho, evolução e programação atual para colar no prontuário">
-              📋 Copiar Consulta
-            </button>
           </div>
         </BlocoColapsavel>
 
@@ -2090,8 +2091,8 @@ ${progTexto}Avaliação: ${textoEfeito}
                   timestamp: ts,
                   dadosGrupos: convertParsedGrupos(row.parsed, row.tipoEletrodo),
                   tipoEletrodo: row.tipoEletrodo || '4-ring',
-                  resumoSessao: row.evolution || '',
-                  notasLivres: '',
+                  resumoSessao: '',
+                  notasLivres: row.evolution || '',
                   clinica: '',
                   type: 'active',
                   importadoViaExtrator: true,
