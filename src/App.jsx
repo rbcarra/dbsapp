@@ -35,6 +35,7 @@ export default function App() {
 
   // States do Prontuário / Sessão
   const [tipoEletrodo, setTipoEletrodo] = useState('4-ring');
+  const [modoAmplitude, setModoAmplitude] = useState('mA'); // 'mA' | 'V'
   const criarProgramaInicial = (tipo = tipoEletrodo) => ({
     contatos: getContatosIniciais(tipo), amp: 0.0, pw: 60, freq: 130, efeito: 'neutro'
   });
@@ -59,6 +60,7 @@ export default function App() {
   const [tendenciasEstimulacao, setTendenciasEstimulacao] = useState("");
   const [enderecoSalvo, setEnderecoSalvo] = useState("");
   const [prescricoesSalvas, setPrescricoesSalvas] = useState({});
+  const [customDocs, setCustomDocs] = useState([]);
   const [activeTab, setActiveTab] = useState('programacao'); // 'programacao' | 'calculadoras'
   const [marcadoresClinicosL, setMarcadoresClinicosL] = useState([]);
   const [marcadoresClinicosR, setMarcadoresClinicosR] = useState([]);
@@ -173,6 +175,7 @@ export default function App() {
     if (!user || !activePatient) return;
     const fetchTemp = async () => {
       setTipoEletrodo('4-ring');
+      setModoAmplitude('mA');
       setGrupoAtivo('A');
       setDadosGrupos({
         A: { L: [criarProgramaInicial('4-ring')], R: [criarProgramaInicial('4-ring')] },
@@ -186,6 +189,7 @@ export default function App() {
       setResumoSessao("");
       setEnderecoSalvo("");
       setPrescricoesSalvas({});
+      setCustomDocs([]);
       setVoltagemBateria("");
       setImpedanciaL("");
       setImpedanciaR("");
@@ -200,6 +204,7 @@ export default function App() {
         if (tempDoc.exists()) {
           const d = tempDoc.data();
           if (d.tipoEletrodo) setTipoEletrodo(d.tipoEletrodo);
+          if (d.modoAmplitude) setModoAmplitude(d.modoAmplitude);
           if (d.dadosGrupos) {
             setDadosGrupos(capPrograms(d.dadosGrupos) || d.dadosGrupos);
           }
@@ -217,6 +222,7 @@ export default function App() {
           if (d.tendenciasEstimulacao !== undefined) setTendenciasEstimulacao(d.tendenciasEstimulacao);
           if (d.enderecoSalvo !== undefined) setEnderecoSalvo(d.enderecoSalvo);
           if (d.prescricoesSalvas) setPrescricoesSalvas(d.prescricoesSalvas);
+          if (d.customDocs) setCustomDocs(d.customDocs);
           if (d.editingSessionId) setEditingSessionId(d.editingSessionId);
         }
       } catch (err) {}
@@ -244,10 +250,10 @@ export default function App() {
     if (!user || !activePatient || isInitializing || showLoginModal) return;
     const timer = setTimeout(() => {
       setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'temp_sessions', activePatient.id), {
-        tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
+        tipoEletrodo, modoAmplitude, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
         voltagemBateria, impedanciaL, impedanciaR, cyclingL, cyclingR,
         marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao,
-        enderecoSalvo, prescricoesSalvas,
+        enderecoSalvo, prescricoesSalvas, customDocs,
         editingSessionId: editingSessionId || null,
         timestamp: Date.now()
       }).catch(() => {});
@@ -323,7 +329,7 @@ export default function App() {
           patientId: activePatient.id,
           timestamp: sessions.find(s => s.id === editingSessionId)?.timestamp || Date.now(),
           type: 'active',
-          tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
+          tipoEletrodo, modoAmplitude, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
           voltagemBateria, impedanciaL, impedanciaR, cyclingL, cyclingR,
           marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao
         };
@@ -657,6 +663,9 @@ export default function App() {
       return temSessoes
         ? `${pacientesCriados} paciente(s) criado(s), ${sessoesImportadas} sessão(ões) importada(s).`
         : `${pacientesCriados} paciente(s) importado(s).`;
+      // Apply endereco from first session that has it
+      const firstEndereco = reviewed.find(r => r.endereco)?.endereco || '';
+      if (firstEndereco) setEnderecoSalvo(firstEndereco);
     } catch(err) {
       console.error(err);
       return 'Erro ao importar CSV.';
@@ -1460,7 +1469,7 @@ ${progTexto}Avaliação: ${textoEfeito}
           <div className="flex flex-col gap-6 p-4 bg-white rounded-2xl border border-slate-200">
             <LEDCalculator notasLivres={notasLivres} />
             <hr className="border-slate-100"/>
-            <TEEDCalculator dadosGrupos={dadosGrupos} impedanciaL={impedanciaL} impedanciaR={impedanciaR} />
+            <TEEDCalculator dadosGrupos={dadosGrupos} impedanciaL={impedanciaL} impedanciaR={impedanciaR} modoAmplitude={modoAmplitude} />
             <hr className="border-slate-100"/>
             <ReceitasSection
               pacienteNome={activePatient?.nome}
@@ -1469,27 +1478,15 @@ ${progTexto}Avaliação: ${textoEfeito}
               notasLivres={notasLivres}
               prescricoesSalvas={prescricoesSalvas}
               onSalvarPrescricao={(id, text) => setPrescricoesSalvas(prev => ({...prev, [id]: text}))}
+              customDocs={customDocs}
+              onAddCustom={(doc) => setCustomDocs(prev => [...prev, doc])}
+              onDeleteCustom={(id) => setCustomDocs(prev => prev.filter(d => d.id !== id))}
+              onUpdateCustom={(id, text) => setCustomDocs(prev => prev.map(d => d.id===id ? {...d, texto:text} : d))}
             />
           </div>
         )}
 
         {activeTab === 'programacao' && <>
-
-        {/* CAMPO: TENDÊNCIAS E PECULIARIDADES */}
-        <textarea
-          value={tendenciasEstimulacao}
-          onChange={e => {
-            setTendenciasEstimulacao(e.target.value);
-            e.target.style.height = '28px';
-            e.target.style.height = (e.target.scrollHeight) + 'px';
-          }}
-          onFocus={e => { e.target.style.height = '28px'; e.target.style.height = (e.target.scrollHeight) + 'px'; }}
-          onBlur={e => { if (!e.target.value) e.target.style.height = '28px'; }}
-          placeholder="Tendências e peculiaridades de estimulação"
-          rows={1}
-          style={{ height: '28px', minHeight: '28px' }}
-          className="w-full px-3 py-1.5 text-sm bg-amber-50/60 border border-amber-200/60 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-400 resize-none text-slate-700 leading-snug overflow-hidden placeholder-amber-400/80 transition-all"
-        />
 
         {/* BLOCO: PROGRAMAÇÃO ANTERIOR */}
         <BlocoColapsavel
@@ -1589,6 +1586,32 @@ ${progTexto}Avaliação: ${textoEfeito}
           onToggle={() => toggleBloco('progAtual')}
           corHeader="bg-indigo-50"
         >
+          {/* Tendências + toggle V/mA dentro do bloco de programação */}
+          <div className="flex gap-2 items-start mb-3">
+            <textarea
+              value={tendenciasEstimulacao}
+              onChange={e => {
+                setTendenciasEstimulacao(e.target.value);
+                e.target.style.height = '28px';
+                e.target.style.height = (e.target.scrollHeight) + 'px';
+              }}
+              onFocus={e => { e.target.style.height = '28px'; e.target.style.height = (e.target.scrollHeight) + 'px'; }}
+              onBlur={e => { if (!e.target.value) e.target.style.height = '28px'; }}
+              placeholder="Tendências e peculiaridades de estimulação"
+              rows={1}
+              style={{ height: '28px', minHeight: '28px' }}
+              className="flex-1 px-3 py-1.5 text-sm bg-amber-50/60 border border-amber-200/60 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-400 resize-none text-slate-700 leading-snug overflow-hidden placeholder-amber-400/80 transition-all"
+            />
+            <div className="flex items-center rounded overflow-hidden border border-slate-200 text-[10px] font-bold shrink-0"
+              title="Corrente controlada (mA) ou voltagem controlada (V) — afeta TEED e VTA. Sessões com geradores diferentes podem ter modos diferentes.">
+              {['mA','V'].map(m => (
+                <button key={m} onClick={() => setModoAmplitude(m)}
+                  className={`px-2.5 py-1.5 transition-all ${modoAmplitude===m?'bg-indigo-600 text-white':'bg-slate-50 text-slate-400 hover:text-slate-600'}`}>
+                  {m}
+                </button>
+              ))}
+            </div>
+          </div>
           {/* Controles de grupo e cópia — movidos do header */}
           <div className="flex flex-wrap items-center gap-2 mb-3 pb-3 border-b border-slate-100">
             <div className="flex items-center bg-slate-100 rounded px-2 py-1.5 border border-slate-200">
@@ -1672,6 +1695,9 @@ ${progTexto}Avaliação: ${textoEfeito}
                         marcadoresTodosL={marcadoresTodosL}
                         historicoTodos={historicoTodosL}
                         structuralMap={structuralMapL}
+                        modoAmplitude={modoAmplitude}
+                        impedanciaL={impedanciaL}
+                        impedanciaR={impedanciaR}
                         configStr={configStr}
                         onAdicionarMarcador={(tipo) => adicionarMarcadorClinico('L', tipo, idx)}
                         onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('L', cfg)}
@@ -1739,6 +1765,9 @@ ${progTexto}Avaliação: ${textoEfeito}
                         marcadoresTodosL={marcadoresTodosR}
                         historicoTodos={historicoTodosR}
                         structuralMap={structuralMapR}
+                        modoAmplitude={modoAmplitude}
+                        impedanciaL={impedanciaL}
+                        impedanciaR={impedanciaR}
                         configStr={configStr}
                         onAdicionarMarcador={(tipo) => adicionarMarcadorClinico('R', tipo, idx)}
                         onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('R', cfg)}
@@ -2230,6 +2259,7 @@ ${progTexto}Avaliação: ${textoEfeito}
                   tipoEletrodo: row.tipoEletrodo || '4-ring',
                   resumoSessao: row.evolution || '',
                   notasLivres: '',
+                  tendenciasEstimulacao: row.tendencias || '',
                   clinica: '',
                   type: 'active',
                   importadoViaExtrator: true,

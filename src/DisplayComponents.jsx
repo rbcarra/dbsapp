@@ -1143,14 +1143,19 @@ const POSITIVE_EFFECTS = new Set(['bradicinesia','rigidez','tremor']);
 
 const VTAView = ({ programaContatos, ampAtual, pw, marcadores, marcadoresRing,
                    historicoRef, anteriorContact, tipoEletrodo, sessaoAtualTimestamp,
-                   forcedSize, structuralMap }) => {
-  const [kFactor, setKFactor] = React.useState(0.45); // mm / sqrt(mA·µs)
+                   forcedSize, structuralMap, modoAmplitude, impedanciaL, impedanciaR, lado }) => {
+  // k defaults: 0.45 for mA mode, 0.55 for V mode (Butson & McIntyre empirical)
+  const [kFactor, setKFactor] = React.useState(0.45);
   const [showThresh, setShowThresh] = React.useState(true);
   const [showHist, setShowHist] = React.useState(true);
 
+  const isVMode = modoAmplitude === 'V';
+  // Reset k default when mode changes
+  React.useEffect(() => { setKFactor(isVMode ? 0.55 : 0.45); }, [isVMode]);
+
   const S = forcedSize ?? 260;
   const C = S / 2;
-  const MAX_MM = 5.0;  // display radius in mm
+  const MAX_MM = 5.0;
   const mmToSvg = (mm) => (mm / MAX_MM) * (C - 12);
 
   const anteriorRad = (CONTACT_ANTERIOR_ANGLES[anteriorContact] ?? 90) * Math.PI / 180;
@@ -1160,10 +1165,16 @@ const VTAView = ({ programaContatos, ampAtual, pw, marcadores, marcadoresRing,
     ry: ux * Math.sin(xyTheta) + uy * Math.cos(xyTheta),
   });
 
-  // Current VTA: elipsoid major axis along stim vector
+  // Current VTA: amplitude effective for radius calculation
+  // V mode: if impedance known → convert V→mA first (I=V/R); else use k_v × √(V×PW)
+  // mA mode: r = k × √(I_ef × PW)  (standard Butson & McIntyre)
   const curVec = programaContatos ? dirUnitVector2D(programaContatos) : null;
   const ampEf  = programaContatos && ampAtual ? calcAmpEfetiva(programaContatos, ampAtual) : 0;
-  const vtaR   = ampEf > 0 && pw > 0 ? kFactor * Math.sqrt(ampEf * pw) : 0;
+  const imp = parseFloat((lado === 'L' ? impedanciaL : impedanciaR) || '0') || 0;
+  const ampEffForVTA = isVMode && imp > 0
+    ? ampEf / imp * 1000   // V / Ω × 1000 = mA (then use mA formula)
+    : ampEf;               // already in mA, or V used directly with k_v
+  const vtaR = ampEffForVTA > 0 && pw > 0 ? kFactor * Math.sqrt(ampEffForVTA * pw) : 0;
   // Ellipse: major = vtaR along stim dir, minor = vtaR * 0.65 perpendicular
   const vtaMinor = vtaR * 0.65;
 
@@ -1222,6 +1233,10 @@ const VTAView = ({ programaContatos, ampAtual, pw, marcadores, marcadoresRing,
     <div className="flex flex-col gap-1">
       {/* Controls */}
       <div className="flex items-center gap-2 flex-wrap px-0.5">
+        {/* Mode indicator */}
+        <div className={`text-[7px] font-bold px-1.5 py-0.5 rounded border ${isVMode ? 'bg-amber-100 border-amber-300 text-amber-700' : 'bg-indigo-100 border-indigo-200 text-indigo-600'}`}>
+          {isVMode ? (imp>0?'V→mA/R':'V-ctrl') : 'I-ctrl'}
+        </div>
         <div className="flex items-center gap-1">
           <span className="text-[7px] text-slate-400 uppercase font-bold">k=</span>
           <input type="range" min={0.1} max={0.9} step={0.05} value={kFactor}
@@ -1422,7 +1437,7 @@ const VTAView = ({ programaContatos, ampAtual, pw, marcadores, marcadoresRing,
   );
 };
 
-const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, isAmplitude, historicoRef, marcadores, marcadoresRing, marcadoresTodosL, historicoTodos, structuralMap, sessaoAtualTimestamp, tipoEletrodo, programaContatos }) => {
+const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, isAmplitude, historicoRef, marcadores, marcadoresRing, marcadoresTodosL, historicoTodos, structuralMap, sessaoAtualTimestamp, tipoEletrodo, programaContatos, modoAmplitude, impedanciaL, impedanciaR, lado }) => {
   const [agruparPorFreq, setAgruparPorFreq] = React.useState(false);
   const [anteriorContact, setAnteriorContact] = React.useState('A');
   const [fullscreenDisplay, setFullscreenDisplay] = React.useState(null); // {tipo, grpKey}
@@ -1513,6 +1528,10 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, is
           tipoEletrodo={tipoEletrodo}
           sessaoAtualTimestamp={sessaoAtualTimestamp}
           structuralMap={structuralMap}
+          modoAmplitude={modoAmplitude}
+          impedanciaL={impedanciaL}
+          impedanciaR={impedanciaR}
+          lado={lado}
         /></>;
       }
 

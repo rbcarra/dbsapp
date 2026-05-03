@@ -33,45 +33,37 @@ const LED_MEDS = [
 ];
 
 // Parser: try to extract medication names and doses from evolution text
+// ─── LED MEDICATION PARSER ─────────────────────────────────────────────────────
 const parseLEDFromText = (text) => {
   if (!text) return {};
   const found = {};
-  const lower = text.toLowerCase();
-
-  const patterns = [
-    // levodopa / carbidopa combinations
-    { re: /(?:levodopa|levopa|ldopa|l-dopa|sinemet|prolopa|stalevo|rytary|parcopa)\s*(?:[\+\/]?\s*carbidopa)?\s*(?:[\d.,]+\s*mg)?\s*(?:[\dx]\s*)?(\d+(?:[.,]\d+)?)\s*mg/gi,
-      ids: ['levo_ir'], nameHints: ['levodopa','stalevo','sinemet','prolopa'] },
-    { re: /(?:sifrol|pramipexol|mirapexin)\s+(?:[\d.,]+\s*mg\s*[\dx]?\s*){0,2}(\d+[.,]\d+|\d+)\s*mg/gi,
-      ids: ['prami'] },
-    { re: /(?:ropinirol|requip|rotigotin?a?|neupro)\s+(\d+(?:[.,]\d+)?)\s*mg/gi,
-      ids: ['ropi','roti'] },
-    { re: /(?:apomorfina|apo-go|apokyn)\s+(\d+(?:[.,]\d+)?)\s*mg/gi,
-      ids: ['apo_sc'] },
-    { re: /(?:rasagilina|azilect)\s+(\d+(?:[.,]\d+)?)\s*mg/gi,
-      ids: ['rasagilina'] },
-    { re: /(?:safinamida|xadago)\s+(\d+(?:[.,]\d+)?)\s*mg/gi,
-      ids: ['safinamida'] },
-    { re: /(?:selegilina|eldepryl|jumexal)\s+(\d+(?:[.,]\d+)?)\s*mg/gi,
-      ids: ['selegilina'] },
-    { re: /(?:entacapona|comtan|stalevo)\s+(\d+(?:[.,]\d+)?)\s*mg/gi,
-      ids: ['entacapona'] },
-    { re: /(?:opicapona|ongentys)\s+(\d+(?:[.,]\d+)?)\s*mg/gi,
-      ids: ['opicapona'] },
-    { re: /(?:amantadina|symmetrel|mantadan)\s+(\d+(?:[.,]\d+)?)\s*mg/gi,
-      ids: ['amantadina'] },
-    { re: /(?:rotigotina|neupro)\s+(\d+(?:[.,]\d+)?)\s*mg/gi,
-      ids: ['roti'] },
-  ];
-
-  for (const { re, ids } of patterns) {
-    let m;
-    while ((m = re.exec(text)) !== null) {
-      const dose = parseFloat(m[1].replace(',','.'));
-      if (!isNaN(dose) && dose > 0) {
-        for (const id of ids) {
-          if (!found[id]) found[id] = dose;
-        }
+  const LED_PATTERNS = {
+    levodopa:    /prolopa(?:\s*bd)?|levodopa|sinemet|stalevo|rytary/i,
+    amantadina:  /amantadina|mantadan/i,
+    pramipexol:  /pramipexol|sifrol|mirapexin/i,
+    ropinirol:   /ropinirol|requip/i,
+    rotigotina:  /rotigotina|neupro/i,
+    rasagilina:  /rasagilina|azilect/i,
+    safinamida:  /safinamida|xadago/i,
+    selegilina:  /selegilina|eldepryl/i,
+    entacapona:  /entacapona|comtan/i,
+    opicapona:   /opicapona|ongentys/i,
+  };
+  const FRAC = { '¼': 0.25, '½': 0.5, '¾': 0.75 };
+  const pf = (s) => FRAC[s] ?? parseFloat((s||'').replace(',','.')) ?? 0;
+  for (const line of text.split(/\n/)) {
+    for (const [id, pat] of Object.entries(LED_PATTERNS)) {
+      if (!(id in found) && pat.test(line)) {
+        let unit = 0;
+        const dm = line.match(/(\d+(?:[.,]\d+)?)(?:\/\d+)?\s*(?:mg|mcg)/i);
+        if (dm) unit = parseFloat(dm[1].replace(',','.'));
+        const xyz = line.match(/(\d+)\s*[-–]\s*(\d+)\s*[-–]\s*(\d+)/);
+        if (xyz) { found[id] = unit * ((+xyz[1])+(+xyz[2])+(+xyz[3])); continue; }
+        const fracs = [...line.matchAll(/([¼½¾]|\d+(?:[.,]\d+)?)\s*cps?\b/gi)];
+        if (fracs.length > 0) { found[id] = unit * fracs.reduce((s,m) => s+pf(m[1]),0); continue; }
+        const nx = line.match(/(\d+)\s*[xX×]\s*ao\s*dia/i);
+        if (nx) { found[id] = unit * +nx[1]; continue; }
+        found[id] = unit;
       }
     }
   }
@@ -188,22 +180,28 @@ export const LEDCalculator = ({ notasLivres }) => {
 //
 // Ref: Koss et al. (1999); Frankemolle et al. (2010)
 
-const calcTEED = (amp, pw, freq, impedance) => {
-  // amp in mA, pw in µs, freq in Hz, impedance in Ω
-  // Returns µJ/s
+const calcTEED = (amp, pw, freq, impedance, isVMode) => {
   if (amp <= 0 || pw <= 0 || freq <= 0) return null;
-  if (impedance > 0) {
-    // Full formula: (I_mA/1000)² × R_Ω × PW_µs/1000000 × F_Hz × 10^6 to get µJ/s
-    const I_A = amp / 1000;
-    const PW_s = pw / 1e6;
-    return Math.round(I_A * I_A * impedance * PW_s * freq * 1e6 * 10) / 10; // µJ/s
+  const PW_s = pw / 1e6;
+  if (isVMode) {
+    // Voltage-controlled: TEED = V² / R × PW × F  (requires impedance)
+    if (impedance > 0) {
+      return Math.round(amp * amp / impedance * PW_s * freq * 1e6 * 10) / 10; // µJ/s
+    }
+    // No impedance → proxy in V·µC/s (V × PW × F, different unit, show as proxy)
+    return Math.round(amp * pw * freq / 1000 * 10) / 10;
   } else {
-    // Proxy: µC/s = mA × µs × Hz / 1000
+    // Current-controlled: TEED = I² × R × PW × F
+    if (impedance > 0) {
+      const I_A = amp / 1000;
+      return Math.round(I_A * I_A * impedance * PW_s * freq * 1e6 * 10) / 10; // µJ/s
+    }
+    // No impedance → proxy: charge rate µC/s
     return Math.round(amp * pw * freq / 1000 * 10) / 10;
   }
 };
 
-export const TEEDCalculator = ({ dadosGrupos, impedanciaL, impedanciaR }) => {
+export const TEEDCalculator = ({ dadosGrupos, impedanciaL, impedanciaR, modoAmplitude }) => {
   const [customImpL, setCustomImpL] = useState('');
   const [customImpR, setCustomImpR] = useState('');
   const [activeGroup, setActiveGroup] = useState('A');
@@ -218,7 +216,7 @@ export const TEEDCalculator = ({ dadosGrupos, impedanciaL, impedanciaR }) => {
       ['L','R'].forEach(side => {
         const imp = side === 'L' ? impL : impR;
         (dadosGrupos?.[g]?.[side] || []).forEach((prog, i) => {
-          const teed = calcTEED(prog.amp, prog.pw, prog.freq, imp);
+          const teed = calcTEED(prog.amp, prog.pw, prog.freq, imp, modoAmplitude === 'V');
           out[g][side].push({ prog, teed, idx: i });
           if (teed) {
             if (side === 'L') out[g].totalL += teed;
@@ -237,7 +235,7 @@ export const TEEDCalculator = ({ dadosGrupos, impedanciaL, impedanciaR }) => {
       <div>
         <h3 className="text-sm font-bold text-slate-700">TEED — Energia Elétrica Total Entregue</h3>
         <p className="text-[10px] text-slate-400">
-          {hasImp ? 'I²×R×PW×F (µJ/s)' : 'Modo proxy: I×PW×F/1000 (µC/s, sem impedância)'}
+          {modoAmplitude === 'V' ? (hasImp ? 'V²/R×PW×F (µJ/s) — voltagem controlada' : 'Proxy: V×PW×F/1000 — forneça impedância para resultado preciso') : (hasImp ? 'I²×R×PW×F (µJ/s) — corrente controlada' : 'Proxy: I×PW×F/1000 (µC/s, sem impedância)')}
         </p>
       </div>
 
@@ -246,7 +244,7 @@ export const TEEDCalculator = ({ dadosGrupos, impedanciaL, impedanciaR }) => {
         {[['L','E',impL,setCustomImpL], ['R','D',impR,setCustomImpR]].map(([side,label,val,setter]) => (
           <div key={side} className="flex-1">
             <label className="text-[9px] font-bold text-slate-400 uppercase block mb-0.5">Impedância {label} (Ω)</label>
-            <input type="number" value={customImpL || (side==='L'?impedanciaL:impedanciaR) || ''}
+            <input type="number" value={(side==='L' ? customImpL : customImpR) || (side==='L' ? impedanciaL : impedanciaR) || ''}
               onChange={e => setter(e.target.value)}
               placeholder={`Auto: ${val || 'não definida'}`}
               className="w-full text-xs bg-slate-50 border border-slate-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400 font-mono"/>

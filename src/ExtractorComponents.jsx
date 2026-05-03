@@ -107,8 +107,12 @@ const parseSide = (s) =>
 
 // Correção 2: fallback sem unidade — menor entre 40-180 = pw, maior = freq
 const parseParams = (seg) => {
+  // Normalize slash-separated params: "00-0 C+ / 1,8V / 130hz / 100pw" → space-separated
+  seg = seg.replace(/\s*\/\s*/g, ' ').replace(/\bC\+\s*/g, '');  // remove C+ case notation
+  seg = seg.replace(/\s*\|\s*/g, ' ');  // remove | separators (e.g. "00-0 + | 0,2mA")
+  seg = seg.replace(/\s*\+\s*$/, '');   // remove trailing + (case anode indicator after contacts)
   const amp  = getParam(seg, ['m[aA]', '[Vv](?![Hh][Zz])(?![a-zA-Z])']) ?? 0;
-  const pw   = getParam(seg, ['pw(?![a-zA-Z])', '(?<![a-zA-Z])μs', '(?<![a-zA-Z])us(?![a-zA-Z])', 'µs', '(?<![a-zA-Z])ms(?![a-zA-Z])']);
+  const pw   = getParam(seg, ['pw(?![a-zA-Z])', '(?<![a-zA-Z])μs', '(?<![a-zA-Z])mcs(?![a-zA-Z])', '(?<![a-zA-Z])us(?![a-zA-Z])', 'µs', '(?<![a-zA-Z])ms(?![a-zA-Z])']);
   const freq = getParam(seg, ['[Hh]z(?![a-zA-Z])', '\\bfreq(?:u[eê]ncia)?\\b', '\\bfr\\b']);
 
   let resolvedPw = pw ?? 60;
@@ -291,10 +295,12 @@ const parseNamedContactLine = (line, tipoEl = '4-ring') => {
   // Each segment is either: [LR]N[letter]? [perc]% or [letter][perc]%
   // Normalize: insert '+' between adjacent contact tokens
   // Handles: "L3 30% L4 70%", "2- 30% 3- 70%", "R3 30% R4 70%"
-  const normalizedSpec = contactSpec
-    // "L3 30% L4 70%" → "L3 30% + L4 70%"  (named contacts, L/R required in lookahead)
+  // Normalize connectors: "L4 70% e L3 30%" → "L4 70% + L3 30%"
+  const contactSpecN = contactSpec.replace(/\s+e\s+(?=[LRlr]\d)/g, ' + ');
+  const normalizedSpec = contactSpecN
+    // "L3 30% L4 70%" → "L3 30% + L4 70%"
     .replace(/([LRlr]\d(?:[ABCabc])?(?:\s+\d+%)?)\s+(?=[LRlr]\d)/g, m => m.trimEnd() + ' + ')
-    // "2- 30% 3- 70%" → "2- 30% + 3- 70%"  (direct index contacts)
+    // "2- 30% 3- 70%" → "2- 30% + 3- 70%"
     .replace(/(\d+[\-+](?:\s+\d+%)?)\s+(?=\d+[\-+])/g, m => m.trimEnd() + ' + ');
   const segments = normalizedSpec.split(/\s*\+\s*/);
   let lastLvIdx = 0;
@@ -514,7 +520,26 @@ const parseProgramming = (rawText, tipoEletrodo = '4-ring') => {
       push(currentGroup, parseSide(m4[1]), parseParams(m4[2]||line)); continue;
     }
 
-    // Named-contact format: "L4 2,0 mA 50ms 130hz", "R3+R4 50/50 3,0 ...", etc.
+    // "IPG (+) L5 (-) 0,3mA" → strip IPG(+) and parse as named contact
+  const ipgM = line.match(/^([ED]):\s*IPG\s*\(\+\)\s*([LR]\d)\s*\([-–]\)\s*(.+)/i);
+  if (ipgM) {
+    const side = parseSide(ipgM[1]);
+    const contactStr = ipgM[2] + ' ' + ipgM[3]; // e.g. "L5 0,3 mA 60us 130Hz"
+    const nc = parseNamedContactLine(contactStr, tipoEletrodo);
+    if (nc && (nc.amp > 0 || nc.pw || nc.freq)) {
+      push(currentGroup, side, { contatos: nc.contatos, amp: nc.amp, pw: nc.pw, freq: nc.freq });
+      continue;
+    }
+  }
+
+  // "Lead E/D1/E2" — numbered interleaving leads: treat as same side, will be second program
+  const interlM = line.match(/^Lead\s+([ED])([12])\s+(.+)/i);
+  if (interlM) {
+    const side = parseSide(interlM[1]);
+    push(currentGroup, side, parseParams(interlM[3])); continue;
+  }
+
+  // Named-contact format: "L4 2,0 mA 50ms 130hz", "R3+R4 50/50 3,0 ...", etc.
     if (/^[LRlr]\d/.test(line)) {
       const nc = parseNamedContactLine(line, tipoEletrodo);
       if (nc && (nc.amp > 0 || nc.pw || nc.freq)) {
@@ -929,16 +954,57 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
     }
     const progText = progStartIdx >= 0 ? lines.slice(progStartIdx).join('\n').trim() : '';
 
-    // 3. Evolution: full text of the consultation (including programming section)
+    // 3. Evolution: full text of the consultation
     const dateLineIdx = dateLine ? lines.findIndex(l => l.includes(dateLine.slice(0,10))) : 0;
     const evoStart = Math.max(dateLineIdx + 1, 1);
     const evolution = lines.slice(evoStart).join('\n').trim();
+
+    // 4. Tendências section extraction
+    let tendencias = '';
+    const tendIdx = lines.findIndex(l => /tend[eê]nci/i.test(l));
+    if (tendIdx >= 0) {
+      const tendLine = lines[tendIdx];
+      // Inline: "Tendências da estimulação: texto aqui"
+      const inlineM = tendLine.match(/tend[eê]nci[^:]*:\s*(.+)/i);
+      if (inlineM && inlineM[1].trim()) {
+        tendencias = inlineM[1].trim();
+        // Collect continuation lines (indented or starting with -)
+        let j = tendIdx + 1;
+        while (j < lines.length && (lines[j].startsWith(' ') || lines[j].startsWith('\t') || /^[-–•]/.test(lines[j]))) {
+          tendencias += '\n' + lines[j];
+          j++;
+        }
+      } else {
+        // Block: "# TENDÊNCIAS:" followed by content lines
+        let j = tendIdx + 1;
+        const tendLines = [];
+        while (j < lines.length) {
+          const l = lines[j].trim();
+          // Stop at next major section (#, empty line followed by capital word)
+          if (/^#+\s+[A-ZÁÉÍÓÚ]/.test(l) && l !== lines[tendIdx].trim()) break;
+          if (l) tendLines.push(l);
+          j++;
+        }
+        tendencias = tendLines.join('\n').trim();
+      }
+    }
+
+    // Extract city/address from ID lines ("procedente de X")
+    let endereco = '';
+    for (const l of lines.slice(0, Math.min(15, lines.length))) {
+      const procM = l.match(/procedente\s+de\s+([^,\.\n#]+)/i);
+      if (procM) { endereco = procM[1].trim(); break; }
+      const endM = l.match(/endere[çc]o[:\s]+(.{5,80})/i);
+      if (endM) { endereco = endM[1].trim(); break; }
+    }
 
     setCaptured(prev => ({
       ...prev,
       [cidx]: {
         date: dateLine,
         evolution,
+        tendencias,
+        endereco,
         programming: progText,
         efeitosGrupos: {},
         ...(prev[cidx] || {}),  // don't override if already manually set
@@ -989,10 +1055,22 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
   }, [consultIdx, phase]);
 
   // Auto-detect date lines when text is ready
+  // Detect separator lines (dates + === __ ### RETORNO Seguimento)
+  const isConsultSep = (line) => {
+    const t = line.trim();
+    if (!t) return false;
+    if (isDateLine(t)) return true;
+    if (/^[_=\-#]{4,}$/.test(t)) return true;
+    if (/^RETORNO\s+\d{1,2}[\/.]/i.test(t)) return true;
+    if (/^Seguimento\s+\d{1,2}[\/.]/i.test(t)) return true;
+    if (/^#+\s*RETORNO\b/i.test(t)) return true;
+    return false;
+  };
+
   const autoDetectDates = useCallback((text) => {
     const ls = text.split('\n');
     const found = new Set([0]);
-    ls.forEach((line, i) => { if (i > 0 && isDateLine(line)) found.add(i); });
+    ls.forEach((line, i) => { if (i > 0 && isConsultSep(line)) found.add(i); });
     setBoundaries(found);
   }, []);
 
@@ -1028,6 +1106,8 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
         const d = captured[i] || {};
         const tipoEl = d.tipoEletrodo || tipoEletrodoGlobal;
         const parsed = parseProgramming(d.programming || '', tipoEl);
+        const tendencias = d.tendencias || '';
+        const endereco = d.endereco || '';
         const grupos = Object.keys(parsed).sort();
         const efeitosGrupos = {};
         grupos.forEach(g => { efeitosGrupos[g] = (d.efeitosGrupos||{})[g] || 'neutro'; });
@@ -1056,6 +1136,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
 
         return { nome, hc, date: parseDate(d.date||''), resumo:'',
                  evolution: d.evolution||'', programmingRaw: d.programming||'',
+                 tendencias, endereco,
                  parsed, efeitosGrupos, tipoEletrodo: tipoEl,
                  voltagemBateria: bateria !== null ? String(bateria) : '',
                  impedanciaL: impedanciaL || (impLFromProg ? String(impLFromProg) : ''),
