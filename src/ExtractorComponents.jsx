@@ -296,10 +296,15 @@ const parseNamedContactLine = (line, tipoEl = '4-ring') => {
   // Normalize: insert '+' between adjacent contact tokens
   // Handles: "L3 30% L4 70%", "2- 30% 3- 70%", "R3 30% R4 70%"
   // Normalize connectors: "L4 70% e L3 30%" → "L4 70% + L3 30%"
-  const contactSpecN = contactSpec.replace(/\s+e\s+(?=[LRlr]\d)/g, ' + ');
+  const contactSpecN = contactSpec
+    .replace(/\s+e\s+(?=[LRlr]\d)/g, ' + ')              // "e" connector
+    .replace(/\(([0-9]+)%\)/g, '$1%')                      // "(70%)" → "70%" — strip parens
+    .replace(/([LRlr]\d[+\-])\s+/g, '$1 ');               // "L2+ 100%" no extra space
   const normalizedSpec = contactSpecN
     // "L3 30% L4 70%" → "L3 30% + L4 70%"
-    .replace(/([LRlr]\d(?:[ABCabc])?(?:\s+\d+%)?)\s+(?=[LRlr]\d)/g, m => m.trimEnd() + ' + ')
+    .replace(/([LRlr]\d[+\-]?(?:[ABCabc])?(?:\s+\d+%)?)\s+(?=[LRlr]\d)/g, m => m.trimEnd() + ' + ')
+    // "L3 - 50% L4 - 50%" (sign as separate token)  
+    .replace(/([LRlr]\d\s+[-]\s+\d+%?)\s+(?=[LRlr]\d)/g, m => m.trimEnd() + ' + ')
     // "2- 30% 3- 70%" → "2- 30% + 3- 70%"
     .replace(/(\d+[\-+](?:\s+\d+%)?)\s+(?=\d+[\-+])/g, m => m.trimEnd() + ' + ');
   const segments = normalizedSpec.split(/\s*\+\s*/);
@@ -311,7 +316,8 @@ const parseNamedContactLine = (line, tipoEl = '4-ring') => {
 
     // Full contact ref: [LR]N [letter]? [perc]%
     // e.g. "R4 12%", "R3 A70%", "R3c -5%", "R3+R4" (handled via outer split)
-    const fullRe = /^([+\-]?\s*[LRlr])(\d)\s*([ABCabc])?\s*([\-]?\d+)?\s*%?$/;
+    // Also handles: "L2+" (anode), "L3-" (cathode), "L3 (50%)" or "L3+ (100%)" (parens around perc)
+    const fullRe = /^([+\-]?\s*[LRlr])(\d)\s*([ABCabc])?\s*[+\-]?\s*(\(?[\-]?\d+\)?)\s*%?$/;
     const fullM = segTrim.match(fullRe);
 
     if (fullM) {
@@ -319,9 +325,12 @@ const parseNamedContactLine = (line, tipoEl = '4-ring') => {
       const isAnode = signPfx === '+';
       lastLvIdx = Math.max(0, Math.min(3, parseInt(fullM[2]) - 1));
       const letter = fullM[3] ? fullM[3].toUpperCase() : null;
-      const percStr = fullM[4];
-      const perc = percStr !== undefined && percStr !== null ? parseInt(percStr) : null;
-      refs.push({ lvIdx: lastLvIdx, letter, perc, isAnode });
+      const percStr = (fullM[4] || '').replace(/[()]/g, '');
+      const perc = percStr !== '' ? parseInt(percStr) : null;
+      const isAnodeFromSign = (fullM[1]||'').includes('+')
+        || (seg.match(/^[LRlr]\d[+]/) !== null)
+        || (!!(seg.match(/^[LRlr]\d\s*\+/)));
+      refs.push({ lvIdx: lastLvIdx, letter, perc, isAnode: isAnode || isAnodeFromSign });
       continue;
     }
 
@@ -425,6 +434,7 @@ const parseProgramming = (rawText, tipoEletrodo = '4-ring') => {
   const result = {};
   let currentGroup = 'A';
   let inGroupSection = false; // true after first explicit group header
+  const seenGroups = new Set(); // track group re-definitions
 
   const push = (group, side, prog) => {
     if (!result[group]) result[group] = {};
@@ -453,6 +463,11 @@ const parseProgramming = (rawText, tipoEletrodo = '4-ring') => {
       const g = gm[1].toUpperCase();
       currentGroup = {'1':'A','2':'B','3':'C','4':'D'}[g] || g;
       inGroupSection = true;
+      // If this group was already parsed, reset it (last occurrence = current programming)
+      if (seenGroups.has(currentGroup)) {
+        result[currentGroup] = { L: [], R: [] };
+      }
+      seenGroups.add(currentGroup);
       // Check if named contact info follows on same line after the group marker
       const afterGroup = line.slice(gm[0].length).trim();
       if (afterGroup && /^[LRlr]\d/.test(afterGroup)) {
@@ -1069,9 +1084,25 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
 
   const autoDetectDates = useCallback((text) => {
     const ls = text.split('\n');
-    const found = new Set([0]);
-    ls.forEach((line, i) => { if (i > 0 && isConsultSep(line)) found.add(i); });
-    setBoundaries(found);
+    const raw = new Set([0]);
+    ls.forEach((line, i) => { if (i > 0 && isConsultSep(line)) raw.add(i); });
+
+    // Filter: if block between boundary[i] and boundary[i+1] has < 10 non-empty lines,
+    // remove boundary[i] (keep the lower/later one — merge short block into previous consult)
+    const sorted = [...raw].sort((a,b) => a-b);
+    const keep = new Set([0]);
+    for (let k = 0; k < sorted.length; k++) {
+      const start = sorted[k];
+      const end   = sorted[k + 1] ?? ls.length;
+      const nonEmpty = ls.slice(start, end).filter(l => l.trim()).length;
+      if (nonEmpty >= 10) {
+        keep.add(start);
+      }
+      // If nonEmpty < 10: skip boundary[k] (don't add it), keep[k+1] will be added in next iter
+      // But we must ensure boundary[k+1] is still processed as a candidate
+      // so we just don't add start — boundary[k+1] handles itself
+    }
+    setBoundaries(keep);
   }, []);
 
   const toggleBoundary = (li) => {

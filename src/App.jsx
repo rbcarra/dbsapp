@@ -1129,51 +1129,68 @@ ${progTexto}Avaliação: ${textoEfeito}
 
     const cabecalho = [
       'Nome', 'HC',
-      'Data', 'Resumo', 'Eletrodo', 'Bateria(V)',
+      'Data', 'Resumo', 'Tendencias', 'ModoAmplitude', 'Eletrodo', 'Bateria(V)',
       'ImpedanciaE', 'ImpedanciaD', 'CyclingE', 'CyclingD',
+      'Clinica_Tremor', 'Clinica_Rigidez', 'Clinica_Bradicinesia',
       ...gruposKeys.flatMap(g => lados.flatMap(l => {
         const ladoNome = l === 'L' ? 'E' : 'D';
         return [
-          `Grupo${g}_Lead${ladoNome}_Contatos`, `Grupo${g}_Lead${ladoNome}_Amp(mA)`,
-          `Grupo${g}_Lead${ladoNome}_PW(us)`, `Grupo${g}_Lead${ladoNome}_Freq(Hz)`,
-          `Grupo${g}_Lead${ladoNome}_Efeito`
+          `Grupo${g}_Lead${ladoNome}_Contatos`,    `Grupo${g}_Lead${ladoNome}_Amp(mA)`,
+          `Grupo${g}_Lead${ladoNome}_PW(us)`,      `Grupo${g}_Lead${ladoNome}_Freq(Hz)`,
+          `Grupo${g}_Lead${ladoNome}_Efeito`,
+          // Interleaving program (index 1)
+          `Grupo${g}_Lead${ladoNome}2_Contatos`,   `Grupo${g}_Lead${ladoNome}2_Amp(mA)`,
+          `Grupo${g}_Lead${ladoNome}2_PW(us)`,     `Grupo${g}_Lead${ladoNome}2_Freq(Hz)`,
+          `Grupo${g}_Lead${ladoNome}2_Efeito`,
         ];
       })),
-      'EfeitosColateraisE', 'EfeitosColateraisD', 'NotasLivres'
+      'EfeitosColateraisE', 'EfeitosColateraisD',
+      'MarcadoresE', 'MarcadoresD',
+      'NotasLivres'
     ];
 
     const linhas = ativas.map(s => {
+      const tipoEl = s.tipoEletrodo || '4-ring';
+      const ordem = ORDEM_TEXTO_BAIXO_CIMA[tipoEl];
+      const contatosToCSV = (prog) => {
+        if (!prog) return '';
+        if (typeof prog.contatos === 'string') return prog.contatos;
+        return ordem.map(c => {
+          const st = prog.contatos?.[c]?.state || 'off';
+          if (st === 'off') return '0';
+          const perc = prog.contatos?.[c]?.perc;
+          return perc && perc < 100 ? `${st}(${perc}%)` : st;
+        }).join('');
+      };
       const row = [
         activePatient?.nome || '',
         activePatient?.hc || '',
         formatarData(s.timestamp),
         (s.resumoSessao || '').replace(/[\n,]/g, ' '),
-        s.tipoEletrodo || '',
+        (s.tendenciasEstimulacao || '').replace(/[\n,]/g, ' '),
+        s.modoAmplitude || 'mA',
+        tipoEl,
         s.voltagemBateria || '',
         s.impedanciaL || '', s.impedanciaR || '',
-        s.cyclingL ? 'Sim' : 'Não', s.cyclingR ? 'Sim' : 'Não'
+        s.cyclingL ? 'Sim' : 'Não', s.cyclingR ? 'Sim' : 'Não',
+        s.clinica?.tremor ?? '', s.clinica?.rigidez ?? '', s.clinica?.bradicinesia ?? '',
       ];
       gruposKeys.forEach(g => {
         lados.forEach(l => {
-          const prog = (s.dadosGrupos?.[g]?.[l]?.[0]);
-          if (prog) {
-            const ordem = ORDEM_TEXTO_BAIXO_CIMA[s.tipoEletrodo || '4-ring'];
-            const contStr = ordem.map(c => {
-              const st = prog.contatos?.[c]?.state || 'off';
-              if (st === 'off') return '0';
-              const perc = prog.contatos?.[c]?.perc;
-              return perc && perc < 100 ? `${st}(${perc}%)` : st;
-            }).join('');
-            row.push(contStr, prog.amp ?? '', prog.pw ?? '', prog.freq ?? '', prog.efeito || '');
-          } else {
-            row.push('', '', '', '', '');
-          }
+          const prog0 = s.dadosGrupos?.[g]?.[l]?.[0];
+          const prog1 = s.dadosGrupos?.[g]?.[l]?.[1];
+          row.push(contatosToCSV(prog0), prog0?.amp ?? '', prog0?.pw ?? '', prog0?.freq ?? '', prog0?.efeito || '');
+          row.push(contatosToCSV(prog1), prog1?.amp ?? '', prog1?.pw ?? '', prog1?.freq ?? '', prog1?.efeito || '');
         });
       });
       const ec = s.efeitosColaterais;
       const ecL = Array.isArray(ec) ? ec.join(';') : (ec?.L || []).join(';');
       const ecR = Array.isArray(ec) ? '' : (ec?.R || []).join(';');
-      row.push(ecL, ecR, (s.notasLivres || '').replace(/[\n,]/g, ' '));
+      // Marcadores: serialize as compact JSON (config|tipo|amp|pw|freq)
+      const mToStr = (m) => `${m.config}|${m.tipo}|${m.amp}|${m.pw || ''}|${m.freq || ''}`;
+      const marcE = (s.marcadoresClinicosL || []).map(mToStr).join(';');
+      const marcD = (s.marcadoresClinicosR || []).map(mToStr).join(';');
+      row.push(ecL, ecR, marcE, marcD, (s.notasLivres || '').replace(/[\n,]/g, ' '));
       return row;
     });
 
@@ -1213,62 +1230,88 @@ ${progTexto}Avaliação: ${textoEfeito}
       const tipoEl = get('Eletrodo') || '4-ring';
       const gruposKeys = ['A', 'B', 'C', 'D'];
       const dadosGruposImp = {};
+      const parseContStr = (contStr, tipoEl2) => {
+        const contatos2 = getContatosIniciais(tipoEl2);
+        const ordem2 = ORDEM_TEXTO_BAIXO_CIMA[tipoEl2];
+        if (contStr) {
+          const tokens = [...contStr.matchAll(/(0|\+|-)(?:\((\d+)%\))?/g)];
+          if (tokens.length === ordem2.length) {
+            tokens.forEach((t, ti) => {
+              if (t[1] === '-' || t[1] === '+') {
+                contatos2[ordem2[ti]].state = t[1];
+                contatos2[ordem2[ti]].perc = t[2] ? parseInt(t[2]) : 100;
+              }
+            });
+          }
+        }
+        return contatos2;
+      };
       gruposKeys.forEach(g => {
         dadosGruposImp[g] = { L: [], R: [] };
         [['L','E'], ['R','D']].forEach(([l, ladoNome]) => {
-          const contStr = get(`Grupo${g}_Lead${ladoNome}_Contatos`);
-          const amp = parseFloat(get(`Grupo${g}_Lead${ladoNome}_Amp(mA)`)) || 0;
-          const pw = parseInt(get(`Grupo${g}_Lead${ladoNome}_PW(us)`)) || 60;
-          const freq = parseInt(get(`Grupo${g}_Lead${ladoNome}_Freq(Hz)`)) || 130;
-          const efeito = get(`Grupo${g}_Lead${ladoNome}_Efeito`) || 'neutro';
-          const contatos = getContatosIniciais(tipoEl);
-          const ordem = ORDEM_TEXTO_BAIXO_CIMA[tipoEl];
-          if (contStr) {
-            const tokens = [...contStr.matchAll(/(0|\+|-)(?:\((\d+)%\))?/g)];
-            if (tokens.length === ordem.length) {
-              for (let ti = 0; ti < tokens.length; ti++) {
-                const st = tokens[ti][1]; const perc = tokens[ti][2];
-                if (st === '-' || st === '+') {
-                  contatos[ordem[ti]].state = st;
-                  contatos[ordem[ti]].perc = perc ? parseInt(perc) : 100;
-                }
-              }
-            }
+          // Program 0 (main)
+          const c0 = get(`Grupo${g}_Lead${ladoNome}_Contatos`);
+          const a0 = parseFloat(get(`Grupo${g}_Lead${ladoNome}_Amp(mA)`)) || 0;
+          const p0 = parseInt(get(`Grupo${g}_Lead${ladoNome}_PW(us)`)) || 60;
+          const f0 = parseInt(get(`Grupo${g}_Lead${ladoNome}_Freq(Hz)`)) || 130;
+          const e0 = get(`Grupo${g}_Lead${ladoNome}_Efeito`) || 'neutro';
+          dadosGruposImp[g][l].push({ contatos: parseContStr(c0, tipoEl), amp:a0, pw:p0, freq:f0, efeito:e0 });
+          // Program 1 (interleaving — only if amp > 0)
+          const a1 = parseFloat(get(`Grupo${g}_Lead${ladoNome}2_Amp(mA)`)) || 0;
+          if (a1 > 0) {
+            const c1 = get(`Grupo${g}_Lead${ladoNome}2_Contatos`);
+            const p1 = parseInt(get(`Grupo${g}_Lead${ladoNome}2_PW(us)`)) || 60;
+            const f1 = parseInt(get(`Grupo${g}_Lead${ladoNome}2_Freq(Hz)`)) || 130;
+            const e1 = get(`Grupo${g}_Lead${ladoNome}2_Efeito`) || 'neutro';
+            dadosGruposImp[g][l].push({ contatos: parseContStr(c1, tipoEl), amp:a1, pw:p1, freq:f1, efeito:e1 });
           }
-          dadosGruposImp[g][l].push({ contatos, amp, pw, freq, efeito });
         });
       });
       const ecLStr = get('EfeitosColateraisE');
       const ecRStr = get('EfeitosColateraisD');
       try {
+        // Parse date (fix: was get(cols,'Data') — cols not needed)
+        const dataStr = get('Data');
+        let ts = Date.now() - (linhas.length - i) * 1000;
+        if (dataStr) {
+          const dm = dataStr.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
+          if (dm) {
+            const ano = dm[3].length === 2 ? '20' + dm[3] : dm[3];
+            const parsed = new Date(`${ano}-${dm[2].padStart(2,'0')}-${dm[1].padStart(2,'0')}`).getTime();
+            if (!isNaN(parsed)) ts = parsed;
+          }
+        }
+        // Parse marcadores from "config|tipo|amp|pw|freq" format
+        const parseMarcStr = (str) => str ? str.split(';').filter(Boolean).map(s => {
+          const [config,tipo,amp,pw,freq] = s.split('|');
+          return { config, tipo, amp: parseFloat(amp)||0, pw: parseInt(pw)||60, freq: parseInt(freq)||130 };
+        }) : [];
         await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'sessions'), {
           patientId: activePatient.id,
-          timestamp: (() => {
-              const dataStr = get(cols, 'Data');
-              if (dataStr) {
-                const m = dataStr.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
-                if (m) {
-                  const [, d, mo, y] = m;
-                  const ano = y.length === 2 ? '20' + y : y;
-                  const parsed = new Date(`${ano}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`).getTime();
-                  if (!isNaN(parsed)) return parsed;
-                }
-              }
-              return Date.now() - (linhasIdx.length - linhasIdx.indexOf(i)) * 1000;
-            })(),
+          timestamp: ts,
           type: 'active',
           tipoEletrodo: tipoEl,
+          modoAmplitude: get('ModoAmplitude') || 'mA',
           dadosGrupos: dadosGruposImp,
-          clinica: { tremor: 0, rigidez: 0, bradicinesia: 0 },
-          efeitosColaterais: { L: ecLStr ? ecLStr.split(';').filter(Boolean) : [], R: ecRStr ? ecRStr.split(';').filter(Boolean) : [] },
-          notasLivres: get('NotasLivres'),
-          resumoSessao: get('Resumo'),
-          voltagemBateria: get('Bateria(V)'),
-          impedanciaL: get('ImpedanciaE'),
-          impedanciaR: get('ImpedanciaD'),
-          cyclingL: get('CyclingE') === 'Sim',
-          cyclingR: get('CyclingD') === 'Sim',
-          marcadoresClinicosL: [], marcadoresClinicosR: []
+          clinica: {
+            tremor:      parseInt(get('Clinica_Tremor'))      || 0,
+            rigidez:     parseInt(get('Clinica_Rigidez'))     || 0,
+            bradicinesia:parseInt(get('Clinica_Bradicinesia'))|| 0,
+          },
+          efeitosColaterais: {
+            L: ecLStr ? ecLStr.split(';').filter(Boolean) : [],
+            R: ecRStr ? ecRStr.split(';').filter(Boolean) : []
+          },
+          notasLivres:            get('NotasLivres'),
+          resumoSessao:           get('Resumo'),
+          tendenciasEstimulacao:  get('Tendencias'),
+          voltagemBateria:        get('Bateria(V)'),
+          impedanciaL:            get('ImpedanciaE'),
+          impedanciaR:            get('ImpedanciaD'),
+          cyclingL:               get('CyclingE') === 'Sim',
+          cyclingR:               get('CyclingD') === 'Sim',
+          marcadoresClinicosL:    parseMarcStr(get('MarcadoresE')),
+          marcadoresClinicosR:    parseMarcStr(get('MarcadoresD')),
         });
         importadas++;
       } catch(e) { console.error(e); }
