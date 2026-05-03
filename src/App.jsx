@@ -12,6 +12,8 @@ import { TimelineHistorico } from './DisplayComponents';
 import { ExtractorModal } from './ExtractorComponents';
 import { UPDRSModal } from './UPDRSComponents';
 import { ScalesModal } from './ScalesComponents';
+import { LEDCalculator, TEEDCalculator } from './CalculadorasTab';
+import { ReceitasSection } from './ReceitasTab';
 
 import { auth, db, appId } from './firebase';
 
@@ -54,6 +56,10 @@ export default function App() {
   const [impedanciaR, setImpedanciaR] = useState("");
   const [cyclingL, setCyclingL] = useState(false);
   const [cyclingR, setCyclingR] = useState(false);
+  const [tendenciasEstimulacao, setTendenciasEstimulacao] = useState("");
+  const [enderecoSalvo, setEnderecoSalvo] = useState("");
+  const [prescricoesSalvas, setPrescricoesSalvas] = useState({});
+  const [activeTab, setActiveTab] = useState('programacao'); // 'programacao' | 'calculadoras'
   const [marcadoresClinicosL, setMarcadoresClinicosL] = useState([]);
   const [marcadoresClinicosR, setMarcadoresClinicosR] = useState([]);
 
@@ -65,6 +71,10 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState("");
   const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, sessionId: null, mode: 'soft' });
   const [showMonopolar, setShowMonopolar] = useState(false);
+  const [hiddenMonopolarSessions, setHiddenMonopolarSessions] = useState(new Set());
+  const toggleMonopolarSession = (id) => setHiddenMonopolarSessions(prev => {
+    const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
+  });
   const [showExtrator, setShowExtrator] = useState(false);
   const [showHistoricoText, setShowHistoricoText] = useState(false);
   const [showUPDRS, setShowUPDRS] = useState(false);
@@ -174,6 +184,8 @@ export default function App() {
       setEfeitosColaterais({ L: [], R: [] });
       setNotasLivres("");
       setResumoSessao("");
+      setEnderecoSalvo("");
+      setPrescricoesSalvas({});
       setVoltagemBateria("");
       setImpedanciaL("");
       setImpedanciaR("");
@@ -202,6 +214,9 @@ export default function App() {
           if (d.cyclingR !== undefined) setCyclingR(d.cyclingR);
           if (d.marcadoresClinicosL) setMarcadoresClinicosL(d.marcadoresClinicosL);
           if (d.marcadoresClinicosR) setMarcadoresClinicosR(d.marcadoresClinicosR);
+          if (d.tendenciasEstimulacao !== undefined) setTendenciasEstimulacao(d.tendenciasEstimulacao);
+          if (d.enderecoSalvo !== undefined) setEnderecoSalvo(d.enderecoSalvo);
+          if (d.prescricoesSalvas) setPrescricoesSalvas(d.prescricoesSalvas);
           if (d.editingSessionId) setEditingSessionId(d.editingSessionId);
         }
       } catch (err) {}
@@ -231,7 +246,8 @@ export default function App() {
       setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'temp_sessions', activePatient.id), {
         tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
         voltagemBateria, impedanciaL, impedanciaR, cyclingL, cyclingR,
-        marcadoresClinicosL, marcadoresClinicosR,
+        marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao,
+        enderecoSalvo, prescricoesSalvas,
         editingSessionId: editingSessionId || null,
         timestamp: Date.now()
       }).catch(() => {});
@@ -309,7 +325,7 @@ export default function App() {
           type: 'active',
           tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
           voltagemBateria, impedanciaL, impedanciaR, cyclingL, cyclingR,
-          marcadoresClinicosL, marcadoresClinicosR
+          marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao
         };
         await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'sessions', editingSessionId), sessionData);
         setAutoSaveStatus('saved');
@@ -322,7 +338,7 @@ export default function App() {
     return () => { if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current); };
   }, [tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
       voltagemBateria, impedanciaL, impedanciaR, cyclingL, cyclingR,
-      marcadoresClinicosL, marcadoresClinicosR, editingSessionId]);
+      marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao, editingSessionId]);
 
   const gerarTextoProntuario = (grupos, eletrodo) => {
     let text = '';
@@ -786,7 +802,7 @@ export default function App() {
       type: 'active',
       tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
       voltagemBateria, impedanciaL, impedanciaR, cyclingL, cyclingR,
-      marcadoresClinicosL, marcadoresClinicosR
+      marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao
     };
 
     try {
@@ -825,6 +841,35 @@ export default function App() {
       console.error(err);
       showToast("Erro ao salvar sessão.");
     }
+  };
+
+  // Create a fresh empty session
+  const handleCriarSessaoVazia = async () => {
+    if (!user || !activePatient) return;
+    const empty4ring = getContatosIniciais('4-ring');
+    const makeEmpty = () => ({ contatos: empty4ring, amp: 0, pw: 60, freq: 130, efeito: 'neutro' });
+    const emptyGrupos = { A:{L:[makeEmpty()],R:[makeEmpty()]}, B:{L:[makeEmpty()],R:[makeEmpty()]},
+                          C:{L:[makeEmpty()],R:[makeEmpty()]}, D:{L:[makeEmpty()],R:[makeEmpty()]} };
+    const sessionData = {
+      patientId: activePatient.id, timestamp: Date.now(), type: 'active',
+      tipoEletrodo: '4-ring', dadosGrupos: emptyGrupos,
+      clinica: { tremor:0, rigidez:0, bradicinesia:0 },
+      efeitosColaterais: { L:[], R:[] }, notasLivres: '', resumoSessao: '',
+      voltagemBateria: '', impedanciaL: '', impedanciaR: '',
+      cyclingL: false, cyclingR: false,
+      marcadoresClinicosL: [], marcadoresClinicosR: [], tendenciasEstimulacao: ''
+    };
+    try {
+      const docRef = await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'sessions'), sessionData);
+      // Reset UI to empty state
+      setTipoEletrodo('4-ring'); setDadosGrupos(emptyGrupos);
+      setClinica({ tremor:0, rigidez:0, bradicinesia:0 }); setEfeitosColaterais({ L:[], R:[] });
+      setNotasLivres(''); setResumoSessao(''); setVoltagemBateria('');
+      setImpedanciaL(''); setImpedanciaR(''); setCyclingL(false); setCyclingR(false);
+      setMarcadoresClinicosL([]); setMarcadoresClinicosR([]); setTendenciasEstimulacao('');
+      setEditingSessionId(docRef.id);
+      showToast("Sessão vazia criada!");
+    } catch(err) { console.error(err); showToast("Erro ao criar sessão vazia."); }
   };
 
   const handleExcluirSessao = async () => {
@@ -1348,14 +1393,29 @@ ${progTexto}Avaliação: ${textoEfeito}
             </span>
           )}
           {editingSessionId && <span className="text-[9px] text-slate-500 font-mono hidden lg:inline">editando</span>}
-          <button onClick={() => handleSalvarSessao(false)} className="px-3 py-1.5 rounded font-bold text-sm transition-colors shadow-sm whitespace-nowrap bg-indigo-600 hover:bg-indigo-700 text-white">
-            Salvar Nova Sessão
+          {/* Smart save: if editing or last session <3h, show "Salvar Sessão"; otherwise "Criar nova copiando" */}
+          {(() => {
+            const lastActive = sessions.filter(s => s.type === 'active')[0];
+            const lastIsRecent = lastActive && (Date.now() - (lastActive.timestamp || 0)) < 3 * 60 * 60 * 1000;
+            const shouldSaveOver = editingSessionId || lastIsRecent;
+            return shouldSaveOver ? (
+              <button onClick={() => handleSalvarSessao(true)}
+                className="px-3 py-1.5 rounded font-bold text-sm transition-colors shadow-sm whitespace-nowrap bg-indigo-600 hover:bg-indigo-700 text-white">
+                💾 Salvar Sessão
+              </button>
+            ) : (
+              <button onClick={() => handleSalvarSessao(false)}
+                className="px-3 py-1.5 rounded font-bold text-sm transition-colors shadow-sm whitespace-nowrap bg-indigo-600 hover:bg-indigo-700 text-white"
+                title="Cria nova sessão com os dados atuais copiados">
+                💾 Criar nova sessão copiando dados
+              </button>
+            );
+          })()}
+          <button onClick={handleCriarSessaoVazia}
+            className="px-3 py-1.5 rounded font-bold text-sm transition-colors shadow-sm whitespace-nowrap bg-slate-600 hover:bg-slate-700 text-white"
+            title="Cria sessão nova completamente vazia">
+            ✦ Criar sessão vazia
           </button>
-          {editingSessionId && (
-            <button onClick={() => handleSalvarSessao(true)} className="px-3 py-1.5 rounded font-bold text-sm transition-colors shadow-sm whitespace-nowrap bg-amber-500 hover:bg-amber-600 text-white">
-              Atualizar Sessão
-            </button>
-          )}
           <label className="flex items-center gap-1.5 cursor-pointer bg-slate-800 rounded px-2 py-1.5 shrink-0" title="Se ativo, contatos com % diferentes são tratados como configurações distintas na timeline">
             <input type="checkbox" checked={considerarAmplitude} onChange={e => setConsiderarAmplitude(e.target.checked)} className="accent-indigo-400 w-3.5 h-3.5" />
             <span className="text-[10px] font-bold text-slate-300 uppercase tracking-wider whitespace-nowrap">Div. Amplitude</span>
@@ -1385,64 +1445,51 @@ ${progTexto}Avaliação: ${textoEfeito}
 
       <main className="p-4 w-full flex-1 flex flex-col gap-3 overflow-y-auto">
 
-        
-        {/* BLOCO: PRONTUÁRIO — compact evolution-first layout */}
-        <BlocoColapsavel
-          titulo="Evolução"
-          aberto={blocosAbertos.prontuario}
-          onToggle={() => toggleBloco('prontuario')}
-        >
-          {/* Header line: session title + battery */}
-          <div className="flex items-center gap-2 mb-2">
-            <input type="text" value={resumoSessao} onChange={e => setResumoSessao(e.target.value)}
-              placeholder={`Resumo: Digite aqui em poucas palavras a impressão geral ou ocorrência mais importante dessa consulta`}
-              className="flex-1 px-3 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 font-medium" />
-            <div className="flex items-center gap-1.5 shrink-0">
-              <span className="text-[10px] text-slate-400 font-bold">🔋</span>
-              <input type="text" value={voltagemBateria} onChange={e => setVoltagemBateria(e.target.value)}
-                placeholder="V"
-                className="w-20 px-2 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono text-slate-700 text-center" />
-            </div>
-          </div>
-          {/* Auto-expanding evolution textarea */}
-          <textarea
-            value={notasLivres}
-            onChange={(e) => {
-              setNotasLivres(e.target.value);
-              e.target.style.height = 'auto';
-              e.target.style.height = Math.max(60, e.target.scrollHeight) + 'px';
-            }}
-            onFocus={(e) => { e.target.style.height = 'auto'; e.target.style.height = Math.max(60, e.target.scrollHeight) + 'px'; }}
-            placeholder="Cole ou registre aqui a evolução do paciente..."
-            rows={2}
-            style={{ minHeight: '60px', height: notasLivres ? 'auto' : '60px' }}
-            className="w-full p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none text-slate-700 leading-relaxed overflow-hidden"
-          />
-          <div className="flex items-center justify-between mt-2">
-            <div className="flex items-center gap-2">
-              <button onClick={() => setShowHistoricoText(true)}
-                className="flex items-center gap-1.5 text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg font-bold transition-all border border-slate-200"
-                title="Ver histórico completo de programação em texto">
-                📜 Histórico
-              </button>
-              <button onClick={() => setShowUPDRS(true)}
-                className="flex items-center gap-1.5 text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-3 py-1.5 rounded-lg font-bold transition-all border border-teal-200"
-                title="Abrir pontuação MDS-UPDRS Parte III">
-                📊 UPDRS-III
-              </button>
-              <button onClick={() => setShowScales(true)}
-                className="flex items-center gap-1.5 text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg font-bold transition-all border border-indigo-200"
-                title="Escalas clínicas: BFM, SARA, PDQ, YGTSS, Exame Parkinsoniano">
-                📐 Escalas
-              </button>
-            </div>
-            <button onClick={copiarConsultaClipboard}
-              className="flex items-center gap-1.5 text-xs bg-slate-700 hover:bg-slate-900 text-white px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm"
-              title="Copia cabeçalho, evolução e programação atual para colar no prontuário">
-              📋 Copiar Consulta
+        {/* TAB BAR */}
+        <div className="flex gap-1 mb-3 border-b border-slate-200 pb-1">
+          {[['programacao','⚡ Programação'],['calculadoras','🧮 Calculadoras e Receitas']].map(([id,label]) => (
+            <button key={id} onClick={() => setActiveTab(id)}
+              className={`px-3 py-1.5 text-xs font-bold rounded-t transition-all ${activeTab===id?'bg-white border border-b-white border-slate-200 text-slate-800 -mb-px':'text-slate-400 hover:text-slate-600'}`}>
+              {label}
             </button>
+          ))}
+        </div>
+
+        {/* CALCULADORAS TAB */}
+        {activeTab === 'calculadoras' && (
+          <div className="flex flex-col gap-6 p-4 bg-white rounded-2xl border border-slate-200">
+            <LEDCalculator notasLivres={notasLivres} />
+            <hr className="border-slate-100"/>
+            <TEEDCalculator dadosGrupos={dadosGrupos} impedanciaL={impedanciaL} impedanciaR={impedanciaR} />
+            <hr className="border-slate-100"/>
+            <ReceitasSection
+              pacienteNome={activePatient?.nome}
+              enderecoSalvo={enderecoSalvo}
+              onEnderecoChange={v => setEnderecoSalvo(v)}
+              notasLivres={notasLivres}
+              prescricoesSalvas={prescricoesSalvas}
+              onSalvarPrescricao={(id, text) => setPrescricoesSalvas(prev => ({...prev, [id]: text}))}
+            />
           </div>
-        </BlocoColapsavel>
+        )}
+
+        {activeTab === 'programacao' && <>
+
+        {/* CAMPO: TENDÊNCIAS E PECULIARIDADES */}
+        <textarea
+          value={tendenciasEstimulacao}
+          onChange={e => {
+            setTendenciasEstimulacao(e.target.value);
+            e.target.style.height = '28px';
+            e.target.style.height = (e.target.scrollHeight) + 'px';
+          }}
+          onFocus={e => { e.target.style.height = '28px'; e.target.style.height = (e.target.scrollHeight) + 'px'; }}
+          onBlur={e => { if (!e.target.value) e.target.style.height = '28px'; }}
+          placeholder="Tendências e peculiaridades de estimulação"
+          rows={1}
+          style={{ height: '28px', minHeight: '28px' }}
+          className="w-full px-3 py-1.5 text-sm bg-amber-50/60 border border-amber-200/60 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-400 resize-none text-slate-700 leading-snug overflow-hidden placeholder-amber-400/80 transition-all"
+        />
 
         {/* BLOCO: PROGRAMAÇÃO ANTERIOR */}
         <BlocoColapsavel
@@ -1708,6 +1755,64 @@ ${progTexto}Avaliação: ${textoEfeito}
           </div>
         </BlocoColapsavel>
 
+        {/* BLOCO: PRONTUÁRIO — compact evolution-first layout */}
+        <BlocoColapsavel
+          titulo="Evolução"
+          aberto={blocosAbertos.prontuario}
+          onToggle={() => toggleBloco('prontuario')}
+        >
+          {/* Header line: session title + battery */}
+          <div className="flex items-center gap-2 mb-2">
+            <input type="text" value={resumoSessao} onChange={e => setResumoSessao(e.target.value)}
+              placeholder={`Resumo: Digite aqui em poucas palavras a impressão geral ou ocorrência mais importante dessa consulta`}
+              className="flex-1 px-3 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 font-medium" />
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="text-[10px] text-slate-400 font-bold">🔋</span>
+              <input type="text" value={voltagemBateria} onChange={e => setVoltagemBateria(e.target.value)}
+                placeholder="V"
+                className="w-20 px-2 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono text-slate-700 text-center" />
+            </div>
+          </div>
+          {/* Auto-expanding evolution textarea */}
+          <textarea
+            value={notasLivres}
+            onChange={(e) => {
+              setNotasLivres(e.target.value);
+              e.target.style.height = 'auto';
+              e.target.style.height = Math.max(60, e.target.scrollHeight) + 'px';
+            }}
+            onFocus={(e) => { e.target.style.height = 'auto'; e.target.style.height = Math.max(60, e.target.scrollHeight) + 'px'; }}
+            placeholder="Cole ou registre aqui a evolução do paciente..."
+            rows={2}
+            style={{ minHeight: '60px', height: notasLivres ? 'auto' : '60px' }}
+            className="w-full p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none text-slate-700 leading-relaxed overflow-hidden"
+          />
+          <div className="flex items-center justify-between mt-2">
+            <div className="flex items-center gap-2">
+              <button onClick={() => setShowHistoricoText(true)}
+                className="flex items-center gap-1.5 text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg font-bold transition-all border border-slate-200"
+                title="Ver histórico completo de programação em texto">
+                📜 Histórico
+              </button>
+              <button onClick={() => setShowUPDRS(true)}
+                className="flex items-center gap-1.5 text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-3 py-1.5 rounded-lg font-bold transition-all border border-teal-200"
+                title="Abrir pontuação MDS-UPDRS Parte III">
+                📊 UPDRS-III
+              </button>
+              <button onClick={() => setShowScales(true)}
+                className="flex items-center gap-1.5 text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg font-bold transition-all border border-indigo-200"
+                title="Escalas clínicas: BFM, SARA, PDQ, YGTSS, Exame Parkinsoniano">
+                📐 Escalas
+              </button>
+            </div>
+            <button onClick={copiarConsultaClipboard}
+              className="flex items-center gap-1.5 text-xs bg-slate-700 hover:bg-slate-900 text-white px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm"
+              title="Copia cabeçalho, evolução e programação atual para colar no prontuário">
+              📋 Copiar Consulta
+            </button>
+          </div>
+        </BlocoColapsavel>
+
         {/* BLOCO: RECONSTRUÇÃO */}
         <BlocoColapsavel
           titulo="Reconstrução do Eletrodo"
@@ -1785,8 +1890,23 @@ ${progTexto}Avaliação: ${textoEfeito}
 
       {/* MODAL MONOPOLAR REVIEW */}
       {showMonopolar && (() => {
-        const todosL = [...marcadoresHistoricos.L, ...marcadoresClinicosL];
-        const todosR = [...marcadoresHistoricos.R, ...marcadoresClinicosR];
+        const todosL_raw = [...marcadoresHistoricos.L, ...marcadoresClinicosL];
+        const todosR_raw = [...marcadoresHistoricos.R, ...marcadoresClinicosR];
+        // Session filter for monopolar
+        const monoSessions = (() => {
+          const map = new Map();
+          [...todosL_raw, ...todosR_raw].forEach(m => {
+            const id = m.sessionId || String(m.sessionTimestamp || m.timestamp || '');
+            if (!map.has(id)) map.set(id, { id, ts: m.sessionTimestamp || m.timestamp || 0, resumo: '' });
+          });
+          return [...map.values()].sort((a,b) => b.ts - a.ts);
+        })();
+        const filterMonoMarker = (m) => {
+          const id = m.sessionId || String(m.sessionTimestamp || m.timestamp || '');
+          return !hiddenMonopolarSessions.has(id);
+        };
+        const todosL = hiddenMonopolarSessions.size > 0 ? todosL_raw.filter(filterMonoMarker) : todosL_raw;
+        const todosR = hiddenMonopolarSessions.size > 0 ? todosR_raw.filter(filterMonoMarker) : todosR_raw;
         const ehMonopolar = (config) => {
           if (!config) return false;
           const ativos = config.match(/[-+]/g) || [];
@@ -1851,6 +1971,20 @@ ${progTexto}Avaliação: ${textoEfeito}
                 <div>
                   <h2 className="font-bold text-sm">Monopolar Review</h2>
                   <p className="text-[10px] text-violet-200">Apenas configs com 1 contato ativo. Eixo X = amplitude (mA), max: {effectiveMax} mA</p>
+                  {monoSessions.length > 1 && (
+                    <div className="mt-1 flex items-center gap-1 flex-wrap">
+                      {monoSessions.map(sess => {
+                        const visible = !hiddenMonopolarSessions.has(sess.id);
+                        return (
+                          <button key={sess.id} onClick={() => toggleMonopolarSession(sess.id)}
+                            className={`text-[7px] font-bold px-1.5 py-0.5 rounded border transition-all ${visible ? 'bg-violet-600 border-violet-500 text-violet-100' : 'bg-violet-900/60 border-violet-700 text-violet-400 line-through'}`}>
+                            {new Date(sess.ts).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit'})}
+                          </button>
+                        );
+                      })}
+                      <span className="text-[6px] text-violet-300 ml-1">clique para ocultar/mostrar</span>
+                    </div>
+                  )}
                 </div>
                 <button onClick={() => setShowMonopolar(false)} className="text-white hover:text-violet-200 font-bold text-lg leading-none">x</button>
               </div>
@@ -1907,6 +2041,8 @@ ${progTexto}Avaliação: ${textoEfeito}
           </div>
         );
       })()}
+
+      </> /* end programacao tab */}
 
       {/* MODAL: HISTÓRICO COMPLETO DE PROGRAMAÇÃO */}
       {showHistoricoText && (() => {
@@ -2091,8 +2227,8 @@ ${progTexto}Avaliação: ${textoEfeito}
                   timestamp: ts,
                   dadosGrupos: convertParsedGrupos(row.parsed, row.tipoEletrodo),
                   tipoEletrodo: row.tipoEletrodo || '4-ring',
-                  resumoSessao: '',
-                  notasLivres: row.evolution || '',
+                  resumoSessao: row.evolution || '',
+                  notasLivres: '',
                   clinica: '',
                   type: 'active',
                   importadoViaExtrator: true,

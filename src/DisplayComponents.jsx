@@ -691,9 +691,89 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
 };
 
 
+const SessionFilterDropdown = ({ sessions, hiddenSessions, onToggle }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+  // Close on outside click
+  React.useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+  const hidden = hiddenSessions.size;
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => setOpen(v => !v)}
+        className={`flex items-center gap-1 text-[7px] font-bold px-1.5 py-0.5 rounded border transition-all ${hidden > 0 ? 'bg-amber-100 border-amber-300 text-amber-700' : 'bg-slate-100 border-slate-200 text-slate-500 hover:border-slate-400'}`}
+        title="Filtrar sessões visíveis">
+        👁 Sessões{hidden > 0 ? ` (${sessions.length - hidden}/${sessions.length})` : ''}
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-slate-200 rounded-xl shadow-xl p-2 min-w-[220px] max-h-64 overflow-y-auto">
+          <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 px-1">Sessões na timeline</p>
+          {sessions.map(sess => {
+            const isVisible = !hiddenSessions.has(sess.id);
+            return (
+              <label key={sess.id} className="flex items-center gap-2 px-1 py-1 rounded hover:bg-slate-50 cursor-pointer">
+                <input type="checkbox" checked={isVisible}
+                  onChange={() => onToggle(sess.id)}
+                  className="accent-indigo-500 w-3 h-3"/>
+                <span className={`text-[9px] font-mono ${isVisible ? 'text-slate-700' : 'text-slate-300'}`}>
+                  {new Date(sess.ts).toLocaleDateString('pt-BR', {day:'2-digit',month:'2-digit',year:'2-digit'})}
+                </span>
+                {sess.resumo && (
+                  <span className={`text-[8px] truncate flex-1 ${isVisible ? 'text-slate-500' : 'text-slate-300'}`}>
+                    {sess.resumo.slice(0,30)}
+                  </span>
+                )}
+                <span className={`text-[7px] px-1 rounded font-bold ${isVisible ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}>
+                  {isVisible ? 'vis.' : 'oculta'}
+                </span>
+              </label>
+            );
+          })}
+          <div className="flex gap-1 mt-2 px-1">
+            <button onClick={() => sessions.forEach(s => hiddenSessions.has(s.id) && onToggle(s.id))}
+              className="text-[8px] text-slate-500 hover:text-slate-700 underline">Mostrar todas</button>
+            <button onClick={() => sessions.forEach(s => !hiddenSessions.has(s.id) && onToggle(s.id))}
+              className="text-[8px] text-slate-500 hover:text-slate-700 underline ml-2">Ocultar todas</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimestamp, agruparPorFreq }) => {
   const [timelineW, setTimelineW] = React.useState(null);
+  const [hiddenSessions, setHiddenSessions] = React.useState(new Set());
   const dragRef = React.useRef(null);
+
+  // Extract unique sessions from historicoRef
+  const sessionList = React.useMemo(() => {
+    if (!historicoRef) return [];
+    const map = new Map();
+    historicoRef.forEach(h => {
+      const id = h.sessionId || h.date || String(h.amp);
+      if (!map.has(id)) map.set(id, { id, ts: h.date || 0, resumo: h.resumo || '' });
+    });
+    return [...map.values()].sort((a, b) => b.ts - a.ts);
+  }, [historicoRef]);
+
+  const toggleSession = (id) => setHiddenSessions(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+
+  // Filtered historicoRef
+  const historicoFiltered = React.useMemo(() => {
+    if (!historicoRef || hiddenSessions.size === 0) return historicoRef;
+    return historicoRef.filter(h => {
+      const id = h.sessionId || h.date || String(h.amp);
+      return !hiddenSessions.has(id);
+    });
+  }, [historicoRef, hiddenSessions]);
 
   const iniciarResize = (e) => {
     e.preventDefault();
@@ -715,8 +795,8 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
 
   const historicoPorGrupo = useMemo(() => {
     const grupos = {};
-    if (!historicoRef) return grupos;
-    historicoRef.forEach(h => {
+    if (!historicoFiltered) return grupos;
+    historicoFiltered.forEach(h => {
       const key = String(agruparPorFreq ? h.freq : h.pw);
       if (!grupos[key]) grupos[key] = [];
       grupos[key].push(h);
@@ -724,7 +804,7 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
     return Object.keys(grupos).sort((a,b) => Number(a) - Number(b)).reduce((obj, key) => {
       obj[key] = grupos[key]; return obj;
     }, {});
-  }, [historicoRef, agruparPorFreq]);
+  }, [historicoFiltered, agruparPorFreq]);
 
   const effectiveMax = maxAmp > 0 ? maxAmp : 4;
 
@@ -748,6 +828,12 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
 
   return (
     <div className="relative w-full">
+      {/* Session filter */}
+      {sessionList.length > 1 && (
+        <div className="flex justify-end mb-1">
+          <SessionFilterDropdown sessions={sessionList} hiddenSessions={hiddenSessions} onToggle={toggleSession}/>
+        </div>
+      )}
       {/* Container com scroll horizontal */}
       <div className="overflow-x-auto custom-scrollbar rounded-t border border-slate-200 bg-slate-50 mb-1">
         <div ref={dragRef} className="flex flex-col p-1 space-y-1" style={{ width: `${innerW}px`, minWidth: '100%' }}>
