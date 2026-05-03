@@ -37,32 +37,43 @@ const LED_MEDS = [
 const parseLEDFromText = (text) => {
   if (!text) return {};
   const found = {};
+  // IDs must match LED_MEDS ids for the "Detected" banner to show names
   const LED_PATTERNS = {
-    levodopa:    /prolopa(?:\s*bd)?|levodopa|sinemet|stalevo|rytary/i,
+    levo_ir:     /prolopa(?:\s*bd)?|levodopa(?!\s*hbs|\s*dispers)/i,
+    levo_cr:     /prolopa\s*(?:cr|lp|retard|dr)\b/i,
+    levo_lcig:   /(?:duodopa|lecigon|lcig)/i,
     amantadina:  /amantadina|mantadan/i,
-    pramipexol:  /pramipexol|sifrol|mirapexin/i,
-    ropinirol:   /ropinirol|requip/i,
-    rotigotina:  /rotigotina|neupro/i,
+    prami:       /pramipexol|sifrol|mirapexin/i,
+    ropi:        /ropinirol|requip/i,
+    roti:        /rotigotina|neupro/i,
+    apo_sc:      /apomorfina|apo-go|apokyn/i,
     rasagilina:  /rasagilina|azilect/i,
     safinamida:  /safinamida|xadago/i,
     selegilina:  /selegilina|eldepryl/i,
     entacapona:  /entacapona|comtan/i,
     opicapona:   /opicapona|ongentys/i,
+    zonisamida:  /zonisamida/i,
   };
-  const FRAC = { '¼': 0.25, '½': 0.5, '¾': 0.75 };
-  const pf = (s) => FRAC[s] ?? parseFloat((s||'').replace(',','.')) ?? 0;
+  const FRAC_LED = {'\u00bc':0.25,'\u00bd':0.5,'\u00be':0.75,'¼':0.25,'½':0.5,'¾':0.75};
   for (const line of text.split(/\n/)) {
     for (const [id, pat] of Object.entries(LED_PATTERNS)) {
       if (!(id in found) && pat.test(line)) {
         let unit = 0;
         const dm = line.match(/(\d+(?:[.,]\d+)?)(?:\/\d+)?\s*(?:mg|mcg)/i);
         if (dm) unit = parseFloat(dm[1].replace(',','.'));
-        const xyz = line.match(/(\d+)\s*[-–]\s*(\d+)\s*[-–]\s*(\d+)/);
+        const xyz = line.match(/(\d+)\s*[-\u2013]\s*(\d+)\s*[-\u2013]\s*(\d+)/);
         if (xyz) { found[id] = unit * ((+xyz[1])+(+xyz[2])+(+xyz[3])); continue; }
-        const fracs = [...line.matchAll(/([¼½¾]|\d+(?:[.,]\d+)?)\s*cps?\b/gi)];
-        if (fracs.length > 0) { found[id] = unit * fracs.reduce((s,m) => s+pf(m[1]),0); continue; }
-        const nx = line.match(/(\d+)\s*[xX×]\s*ao\s*dia/i);
+        const fracs = [...line.matchAll(/([\u00bc\u00bd\u00be]|\d+(?:[.,]\d+)?)\s*cps?\b/gi)];
+        if (fracs.length > 0) {
+          const cps = fracs.reduce((s,m) => s+((FRAC_LED[m[1]] !== undefined ? FRAC_LED[m[1]] : parseFloat((m[1]||'0').replace(',','.')) || 0)),0);
+          const mult = line.match(/(\d+)\s*[xX]\s*(?:ao\s*)?(?:dia|d\b)/i);
+          found[id] = unit * (mult ? cps * +mult[1] : cps); continue;
+        }
+        const nx = line.match(/(\d+)\s*[xX]\s*(?:ao\s*)?(?:dia|d\b|\/d\b)/i)
+                || line.match(/(\d+)\s*[xX]d\b/i);
         if (nx) { found[id] = unit * +nx[1]; continue; }
+        const times = line.match(/\b\d{1,2}h(?:\d{2})?\b/g);
+        if (times && times.length >= 2) { found[id] = unit * times.length; continue; }
         found[id] = unit;
       }
     }

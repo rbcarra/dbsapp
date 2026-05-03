@@ -33,26 +33,53 @@ const MED_PATTERNS = {
   omeprazol:   /omeprazol|pantoprazol|lansoprazol|esomeprazol/i,
   citalopram:  /citalopram|escitalopram|lexapro|cipralex/i,
   sertralina:  /sertralina|zoloft/i,
+  bromoprida:  /bromoprida|bromopride/i,
+  escitalopram:/escitalopram|citalopram|lexapro|cipralex/i,
+  fluoxetina:  /fluoxetina|prozac/i,
+  sertralina:  /sertralina|zoloft/i,
+  bupropiona:  /bupropiona|wellbutrin|zyban/i,
+  baclofeno:   /baclofeno|lioresal/i,
+  gabapentina: /gabapentina|neurontin/i,
+  pregabalina: /pregabalina|lyrica/i,
 };
 
 const _extractDailyDose = (line) => {
   let unit = 0;
   const dm = line.match(/(\d+(?:[.,]\d+)?)(?:\/\d+)?\s*(?:mg|mcg)/i);
   if (dm) unit = parseFloat(dm[1].replace(',','.'));
+
+  // X-Y-Z posology (morning-afternoon-night)
   const xyz = line.match(/(\d+)\s*[-\u2013]\s*(\d+)\s*[-\u2013]\s*(\d+)/);
   if (xyz) { const n=(+xyz[1])+(+xyz[2])+(+xyz[3]); return { dose: unit * n, n }; }
-  const fracs = [...line.matchAll(/([\u00bc\u00bd\u00be]|\d+(?:[.,]\d+)?)\s*cp/gi)];
+
+  // Fraction + cp/cps pattern (e.g. "¾ cp", "3cps")
+  const fracs = [...line.matchAll(/([\u00bc\u00bd\u00be]|\d+(?:[.,]\d+)?)\s*cps?\b/gi)];
+  const FRAC = { '\u00bc': 0.25, '\u00bd': 0.5, '\u00be': 0.75 };
   if (fracs.length > 0) {
-    const FRAC = { '\u00bc': 0.25, '\u00bd': 0.5, '\u00be': 0.75 };
-    const total = fracs.reduce((s,m) => s + (FRAC[m[1]] ?? parseFloat((m[1]||'0').replace(',','.')) ?? 0), 0);
-    return { dose: unit * total, n: total };
+    const cpsPerDose = fracs.reduce((s,m) => s + ((FRAC[m[1]] !== undefined ? FRAC[m[1]] : (parseFloat((m[1]||'0').replace(',','.')) || 0))), 0);
+    // Check for "Nx/dia" or "Nx ao dia" multiplier on same line
+    const mult = line.match(/(\d+)\s*[xX\u00d7]\s*(?:ao\s*)?(?:dia|d\b|\/d\b)/i);
+    const n = mult ? cpsPerDose * +mult[1] : cpsPerDose;
+    return { dose: unit * n, n };
   }
-  const nx = line.match(/(\d+)\s*[xX\u00d7]\s*ao\s*dia/i);
+
+  // "Nx ao dia", "Nx dia", "Nx/dia", "N vezes ao dia", "1x/d"
+  const nx = line.match(/(\d+)\s*[xX\u00d7]\s*(?:ao\s*)?(?:dia|d\b|\/d\b)/i)
+           || line.match(/(\d+)\s*vez(?:es)?\s*(?:ao\s*)?dia/i)
+           || line.match(/(\d+)\s*[xX]\s*\/\s*dia/i);
   if (nx) return { dose: unit * +nx[1], n: +nx[1] };
-  const vezes = line.match(/(\d+)\s*vez(?:es)?\s*ao\s*dia/i);
-  if (vezes) return { dose: unit * +vezes[1], n: +vezes[1] };
+
+  // "8xd" shorthand
+  const xd = line.match(/(\d+)\s*[xX]d\b/i);
+  if (xd) return { dose: unit * +xd[1], n: +xd[1] };
+
+  // Count time-of-day tokens as proxy for n_per_day ("7h30, 9h30, 11h30")
+  const times = line.match(/\b\d{1,2}h(?:\d{2})?\b/g);
+  if (times && times.length >= 2) return { dose: unit * times.length, n: times.length };
+
   return { dose: unit, n: 1 };
 };;
+;
 
 const parseMedsFromText = (text) => {
   if (!text) return {};
@@ -434,7 +461,20 @@ export const ReceitasSection = ({
         />
         {Object.keys(meds).length > 0 && (
           <p className="text-[8px] text-emerald-600 mt-1">
-            🔍 Medicamentos detectados na evolução: {Object.keys(meds).join(', ')}
+            🔍 Medicamentos detectados na evolução: {Object.keys(meds).map(id => ({
+              levodopa:'Prolopa/Levodopa', levodopa_hbs:'Prolopa HBS', levodopa_disp:'Prolopa Dispersível',
+              amantadina:'Amantadina', pramipexol:'Pramipexol', ropinirol:'Ropinirol',
+              rotigotina:'Rotigotina', rasagilina:'Rasagilina', safinamida:'Safinamida',
+              selegilina:'Selegilina', entacapona:'Entacapona', opicapona:'Opicapona',
+              melatonina:'Melatonina', domperidona:'Domperidona', lactulose:'Lactulose',
+              clonazepam:'Clonazepam', quetiapina:'Quetiapina', rivastigmina:'Rivastigmina',
+              donepezila:'Donepezila', venlafaxina:'Venlafaxina', mirtazapina:'Mirtazapina',
+              levotiroxina:'Levotiroxina', propantelina:'Propantelina', omeprazol:'Omeprazol',
+              citalopram:'Escitalopram/Citalopram', sertralina:'Sertralina',
+              bromoprida:'Bromoprida', escitalopram:'Escitalopram', fluoxetina:'Fluoxetina',
+              bupropiona:'Bupropiona', baclofeno:'Baclofeno', gabapentina:'Gabapentina',
+              pregabalina:'Pregabalina',
+            }[id] || id)).join(', ')}
           </p>
         )}
       </div>
