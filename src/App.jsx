@@ -1886,6 +1886,8 @@ ${progTexto}Avaliação: ${textoEfeito}
           </div>
         </BlocoColapsavel>
 
+      </> /* end programacao tab */}
+
       </main>
 
       {/* MODAL MONOPOLAR REVIEW */}
@@ -2042,7 +2044,6 @@ ${progTexto}Avaliação: ${textoEfeito}
         );
       })()}
 
-      </> /* end programacao tab */}
 
       {/* MODAL: HISTÓRICO COMPLETO DE PROGRAMAÇÃO */}
       {showHistoricoText && (() => {
