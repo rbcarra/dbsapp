@@ -13,6 +13,7 @@ import { ExtractorModal } from './ExtractorComponents';
 import { UPDRSModal } from './UPDRSComponents';
 import { ScalesModal } from './ScalesComponents';
 import { JSONImportModal } from './JSONImportModal';
+import { ProgrammingEditor } from './ProgrammingEditor';
 import { LEDCalculator, TEEDCalculator } from './CalculadorasTab';
 import { ReceitasSection } from './ReceitasTab';
 
@@ -61,7 +62,7 @@ export default function App() {
   const [tendenciasEstimulacao, setTendenciasEstimulacao] = useState("");
   const [dispositivoInfo, setDispositivoInfo] = useState({
     fabricante: '', modeloIPG: '', modeloEletrodoE: '', modeloEletrodoD: '',
-    alvoAnatomicоE: '', alvoAnatomicоD: '',
+    alvoAnatomicoE: '', alvoAnatomicoD: '',
     dataImplante: '', dataTrocaIPG: '',
   });
   const [enderecoSalvo, setEnderecoSalvo] = useState("");
@@ -97,8 +98,13 @@ export default function App() {
     if (!grupos) return grupos;
     try {
       const safe = JSON.parse(JSON.stringify(grupos));
-      Object.values(safe).forEach(grupo => {
-        if (!grupo || typeof grupo !== 'object') return; // guard null/non-object
+      Object.values(safe).forEach((grupo, gi) => {
+        if (!grupo || typeof grupo !== 'object') {
+          // Replace null/non-object group with empty valid structure
+          const keys = Object.keys(safe);
+          safe[keys[gi]] = { L: [], R: [] };
+          return;
+        }
         ['L','R'].forEach(lado => {
           if (!Array.isArray(grupo[lado])) { grupo[lado] = []; return; }
           if (grupo[lado].length > 2) grupo[lado] = grupo[lado].slice(0, 2);
@@ -214,7 +220,8 @@ export default function App() {
           if (d.tipoEletrodo) setTipoEletrodo(d.tipoEletrodo);
           if (d.modoAmplitude) setModoAmplitude(d.modoAmplitude);
           if (d.dadosGrupos) {
-            setDadosGrupos(capPrograms(d.dadosGrupos) || d.dadosGrupos);
+            const tipoEl = d.tipoEletrodo || '4-ring';
+            setDadosGrupos(capPrograms(normalizeGrupos(d.dadosGrupos, tipoEl)) || d.dadosGrupos);
           }
           if (d.clinica) setClinica(d.clinica);
           if (d.efeitosColaterais) setEfeitosColaterais(d.efeitosColaterais);
@@ -362,7 +369,7 @@ export default function App() {
     ['A', 'B', 'C', 'D'].forEach(g => {
       text += `Grupo ${g}:\n`;
       ['L', 'R'].forEach(lado => {
-        const progs = grupos[g][lado];
+        const progs = (grupos[g] || {})[lado] || [];
         progs.forEach((prog, idx) => {
           const leadStr = lado === 'L' ? 'E' : 'D';
           const leadName = progs.length > 1 ? `Lead ${leadStr}${idx + 1}` : `Lead ${leadStr}`;
@@ -883,7 +890,7 @@ export default function App() {
       patientId: activePatient.id, timestamp: Date.now(), type: 'active',
       tipoEletrodo: '4-ring', modoAmplitude: 'mA',
       dispositivoInfo: { fabricante:'', modeloIPG:'', modeloEletrodoE:'', modeloEletrodoD:'',
-        alvoAnatomicоE:'', alvoAnatomicоD:'', dataImplante:'', dataTrocaIPG:'' },
+        alvoAnatomicoE:'', alvoAnatomicoD:'', dataImplante:'', dataTrocaIPG:'' },
       dadosGrupos: emptyGrupos,
       clinica: { tremor:0, rigidez:0, bradicinesia:0 },
       efeitosColaterais: { L:[], R:[] }, notasLivres: '', resumoSessao: '',
@@ -1663,9 +1670,10 @@ ${progTexto}Avaliação: ${textoEfeito}
                         {mostrarBotoes && (
                           <div className="flex flex-wrap gap-1">
                             {[
-                              ['bom',    'Melhor grupo',  'bg-emerald-500 hover:bg-emerald-600 text-white'],
-                              ['neutro', 'Bom / Mantido', 'bg-blue-500 hover:bg-blue-600 text-white'],
-                              ['pouco',  'Pouco efeito',  'bg-slate-400 hover:bg-slate-500 text-white'],
+                              ['bom',         'Melhor grupo',  'bg-emerald-500 hover:bg-emerald-600 text-white'],
+                              ['neutro',      'Bom / Mantido', 'bg-blue-500 hover:bg-blue-600 text-white'],
+                              ['pouco',       'Pouco efeito',  'bg-slate-400 hover:bg-slate-500 text-white'],
+                              ['nao_testado', 'Não testado',   'bg-transparent border border-dashed border-slate-400 text-slate-500 hover:bg-slate-50'],
                               ['ruim',   'Col. - Marcha', 'bg-rose-400 hover:bg-rose-500 text-white'],
                               ['ruim',   'Col. - Fala',   'bg-rose-600 hover:bg-rose-700 text-white'],
                               ['ruim',   'Col. - Outro',  'bg-rose-800 hover:bg-rose-900 text-white'],
@@ -1736,9 +1744,9 @@ ${progTexto}Avaliação: ${textoEfeito}
                 <summary className="cursor-pointer text-[10px] font-bold text-slate-500 hover:text-slate-700 select-none flex items-center gap-1">
                   <span className="group-open:rotate-90 transition-transform inline-block">▶</span>
                   🔧 Dispositivo
-                  {(di.fabricante || di.modeloIPG || di.alvoAnatomicоE) && (
+                  {(di.fabricante || di.modeloIPG || di.alvoAnatomicoE) && (
                     <span className="ml-2 font-normal text-slate-400 truncate">
-                      {[di.fabricante, di.modeloIPG, di.alvoAnatomicоE && `Alvo:${di.alvoAnatomicоE}`].filter(Boolean).join(' · ')}
+                      {[di.fabricante, di.modeloIPG, di.alvoAnatomicoE && `Alvo:${di.alvoAnatomicoE}`].filter(Boolean).join(' · ')}
                     </span>
                   )}
                 </summary>
@@ -1764,14 +1772,14 @@ ${progTexto}Avaliação: ${textoEfeito}
                   </div>
                   <div>
                     <label className={lbl}>Alvo E</label>
-                    <select value={di.alvoAnatomicоE} onChange={e=>setDI('alvoAnatomicоE',e.target.value)} className={sel}>
+                    <select value={di.alvoAnatomicoE} onChange={e=>setDI('alvoAnatomicoE',e.target.value)} className={sel}>
                       <option value="">—</option>
                       {ALVOS.map(a=><option key={a}>{a}</option>)}
                     </select>
                   </div>
                   <div>
                     <label className={lbl}>Alvo D</label>
-                    <select value={di.alvoAnatomicоD} onChange={e=>setDI('alvoAnatomicоD',e.target.value)} className={sel}>
+                    <select value={di.alvoAnatomicoD} onChange={e=>setDI('alvoAnatomicoD',e.target.value)} className={sel}>
                       <option value="">—</option>
                       {ALVOS.map(a=><option key={a}>{a}</option>)}
                     </select>
@@ -1788,6 +1796,23 @@ ${progTexto}Avaliação: ${textoEfeito}
               </details>
             );
           })()}
+
+          {/* ProgrammingEditor — direct structured input, always in sync with dadosGrupos */}
+          <details className="mb-3 group">
+            <summary className="cursor-pointer text-[10px] font-bold text-slate-500 hover:text-slate-700 select-none flex items-center gap-1">
+              <span className="group-open:rotate-90 transition-transform inline-block">▶</span>
+              🎛 Edição direta de contatos
+            </summary>
+            <div className="mt-2 p-3 bg-slate-50 rounded-xl border border-slate-100">
+              <ProgrammingEditor
+                dadosGrupos={dadosGrupos}
+                setDadosGrupos={setDadosGrupos}
+                tipoEletrodo={tipoEletrodo}
+                modoAmplitude={modoAmplitude}
+                sessaoAnteriorGrupos={sessaoReferencia?.dadosGrupos || null}
+              />
+            </div>
+          </details>
 
           {/* Controles de grupo e cópia — movidos do header */}
           <div className="flex flex-wrap items-center gap-2 mb-3 pb-3 border-b border-slate-100">
@@ -2261,7 +2286,7 @@ ${progTexto}Avaliação: ${textoEfeito}
           setEditingSessionId(recente.id);
           setTipoEletrodo(recente.tipoEletrodo || '4-ring');
           setModoAmplitude(recente.modoAmplitude || 'mA');
-          try { setDadosGrupos(capPrograms(recente.dadosGrupos) || recente.dadosGrupos); } catch(e){}
+          try { setDadosGrupos(capPrograms(normalizeGrupos(recente.dadosGrupos, recente.tipoEletrodo||'4-ring')) || recente.dadosGrupos); } catch(e){}
           setClinica(recente.clinica || { tremor:0, rigidez:0, bradicinesia:0 });
           setEfeitosColaterais(recente.efeitosColaterais || { L:[], R:[] });
           setNotasLivres(recente.notasLivres || '');

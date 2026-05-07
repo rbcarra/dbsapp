@@ -111,7 +111,7 @@ const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey
             const hType = classifyStim(hContatos, 'directional');
             const isRing = hType === 'ring' || !getDirLevel(h.config);
             const ampEf = calcAmpEfetiva(hContatos, h.amp || 0);
-            const cor = h.efeito === 'bom' ? '#10b981' : h.efeito === 'ruim' ? '#f43f5e' : h.efeito === 'pouco' ? '#94a3b8' : '#67e8f9';
+            const cor = h.efeito === 'bom' ? '#10b981' : h.efeito === 'ruim' ? '#f43f5e' : h.efeito === 'pouco' ? '#94a3b8' : h.efeito === 'nao_testado' ? 'transparent' : h.efeito === 'nao_testado' ? 'transparent' : '#67e8f9';
             const opacity = Math.max(0.4, opacidadeMarcador(h.date || 0, sessaoAtualTimestamp || Date.now()));
             const rr = toR(ampEf);
             if (isRing) {
@@ -895,7 +895,7 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
                   const isMultiple = ampItems.length > 1;
 
                   return ampItems.map((h, i) => {
-                    const cor = h.efeito === 'bom' ? 'bg-emerald-400' : h.efeito === 'ruim' ? 'bg-rose-500' : h.efeito === 'pouco' ? 'bg-slate-400' : 'bg-cyan-300';
+                    const cor = h.efeito === 'bom' ? 'bg-emerald-400' : h.efeito === 'ruim' ? 'bg-rose-500' : h.efeito === 'pouco' ? 'bg-slate-400' : h.efeito === 'nao_testado' ? 'bg-transparent border border-dashed border-slate-300' : 'bg-cyan-300';
                     const opacidade = opacidadeMarcador(h.date || 0, sessaoAtualTimestamp || Date.now());                    
                     if (isMultiple) {
                       const bottomPos = (ampItems.length - 1 - i) * 14 + 2;

@@ -1163,7 +1163,13 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
       const rows = consultations.map((_,i) => {
         const d = captured[i] || {};
         const tipoEl = d.tipoEletrodo || tipoEletrodoGlobal;
-        const parsed = parseProgramming(d.programming || '', tipoEl);
+        // Use editedGrupos if user manually corrected, otherwise fall back to parser
+        const parsed = d.editedGrupos
+          ? Object.fromEntries(Object.entries(d.editedGrupos).map(([g,v]) => [g, {
+              L: v.L?.map(p => ({...p, contatos: Object.fromEntries(Object.entries(p.contatos).map(([k,c])=>[k,{...c}]))})),
+              R: v.R?.map(p => ({...p, contatos: Object.fromEntries(Object.entries(p.contatos).map(([k,c])=>[k,{...c}]))})),
+            }]))
+          : parseProgramming(d.programming || '', tipoEl);
         const tendencias = d.tendencias || '';
         const endereco = d.endereco || '';
         const grupos = Object.keys(parsed).sort();
@@ -1557,51 +1563,39 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
               )}
             </div>
 
-            {/* Programming parse result (editable) */}
-            {capturedForConsult.programming !== undefined && capturedForConsult.programming !== '' && (() => {
-              const parsed = parseProgramming(capturedForConsult.programming);
-              const groups = Object.keys(parsed).sort();
-              return (
-                <div className="p-4 border-b border-slate-800">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Parse automático</p>
-                  {groups.length===0 && (
-                    <p className="text-[10px] text-rose-400">Nenhum Lead detectado — revise na tela de Revisão</p>
-                  )}
-                  {groups.flatMap(g => ['L','R'].map(side => {
-                    const progs = parsed[g]?.[side];
-                    if (!progs) return null;
-                    return progs.map((p,pi) => (
-                      <div key={`${g}${side}${pi}`} className="mb-1.5 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
-                        <p className="text-[10px] font-bold text-emerald-400 mb-0.5">Gr.{g} Lead {side==='L'?'E':'D'}{progs.length>1?` (${pi+1})`:''}:</p>
-                        <p className="text-[11px] font-mono text-slate-300">{contatosToStr(p.contatos)} · {p.amp} mA · {p.pw} µs · {p.freq} Hz</p>
-                      </div>
-                    ));
-                  }))}
-                </div>
-              );
-            })()}
-
-            {/* Editor manual de programação quando parse não detectou nada */}
+            {/* ProgrammingEditor — always visible, pre-filled from parser, directly editable */}
             {capturedForConsult.programming !== undefined && (() => {
-              const parsed = parseProgramming(capturedForConsult.programming);
-              const groups = Object.keys(parsed);
-              const nenhum = groups.length === 0;
-              if (!nenhum) return null;
-              // Nenhum lead detectado — mostrar editor de texto direto
+              const rawParsed = parseProgramming(capturedForConsult.programming || '', tipoEletrodoGlobal);
+              const parsedConverted = convertParsedGrupos(rawParsed, tipoEletrodoGlobal);
+              const current = captured[consultIdx]?.editedGrupos || parsedConverted;
+              const parseDetected = Object.keys(rawParsed).length > 0;
+              const prevCapt = captured[consultIdx - 1];
+              const prevGrupos = prevCapt?.editedGrupos
+                || (prevCapt?.programming ? convertParsedGrupos(parseProgramming(prevCapt.programming || '', tipoEletrodoGlobal), tipoEletrodoGlobal) : null);
               return (
                 <div className="p-4 border-b border-slate-800">
-                  <div className="bg-rose-500/10 border border-rose-500/30 rounded-lg p-3 mb-2">
-                    <p className="text-rose-400 font-black text-[10px] mb-1">⚠ Nenhum Lead detectado</p>
-                    <p className="text-rose-300/70 text-[10px]">Edite o texto abaixo para corrigir o formato e tente novamente</p>
+                  <div className="flex items-center gap-2 mb-3">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">🎛 Programação</p>
+                    {parseDetected
+                      ? <span className="text-[8px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">✓ {Object.keys(rawParsed).length} grupo(s) detectado(s)</span>
+                      : <span className="text-[8px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-400 font-bold">⚠ parser não detectou — preencha abaixo</span>
+                    }
+                    {captured[consultIdx]?.editedGrupos && (
+                      <button onClick={() => setCaptured(prev => {
+                          const n={...prev}; const c={...(n[consultIdx]||{})}; delete c.editedGrupos; n[consultIdx]=c; return n;
+                        })} className="text-[8px] text-amber-400 hover:text-amber-300 underline ml-auto">
+                        ↺ restaurar parser
+                      </button>
+                    )}
                   </div>
-                  <ManualProgEditor
-                    rawText={capturedForConsult.programming}
-                    onSave={(newRaw) => {
-                      setCaptured(prev => ({
-                        ...prev,
-                        [consultIdx]: { ...(prev[consultIdx]||{}), programming: newRaw }
-                      }));
+                  <ProgrammingEditor
+                    dadosGrupos={current}
+                    setDadosGrupos={(newG) => {
+                      const resolved = typeof newG === 'function' ? newG(current) : newG;
+                      setCaptured(prev => ({...prev, [consultIdx]: {...(prev[consultIdx]||{}), editedGrupos: resolved}}));
                     }}
+                    tipoEletrodo={tipoEletrodoGlobal}
+                    sessaoAnteriorGrupos={prevGrupos}
                   />
                 </div>
               );
