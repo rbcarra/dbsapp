@@ -26,13 +26,6 @@ const noSpinner = '[appearance:textfield] [&::-webkit-inner-spin-button]:hidden 
 const LeadRow = ({ label, prog, onChange, tipoEletrodo, modoAmplitude, cycling, onCyclingChange }) => {
   const ordem = ORDEM_TEXTO_BAIXO_CIMA[tipoEletrodo] || ['0','1','2','3'];
 
-  const allocatedCathode = useMemo(() =>
-    ordre.reduce ? ordre : ordem.reduce((s, k) => {
-      const c = prog.contatos?.[k];
-      return c?.state === '-' ? s + (c.perc || 100) : s;
-    }, 0),
-  [prog.contatos, ordem]);
-  // Fix: compute correctly
   const totalCat = ordem.reduce((s, k) => {
     const c = prog.contatos?.[k];
     return c?.state === '-' ? s + (c.perc || 100) : s;
