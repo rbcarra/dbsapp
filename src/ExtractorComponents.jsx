@@ -107,6 +107,10 @@ const parseSide = (s) =>
 
 // Correção 2: fallback sem unidade — menor entre 40-180 = pw, maior = freq
 const parseParams = (seg) => {
+  // Strip per-contact current annotations like "(1,8 mA)" — they belong to individual contacts,
+  // not the total amplitude; total may appear after "->" which is stripped separately
+  seg = seg.split(/\s*->|→/).shift();
+  seg = seg.replace(/\([\d.,]+\s*m[aA]\)/gi, '');  // remove "(1,8 mA)" per-contact currents
   // Normalize slash-separated params: "00-0 C+ / 1,8V / 130hz / 100pw" → space-separated
   seg = seg.replace(/\s*\/\s*/g, ' ').replace(/\bC\+\s*/g, '');  // remove C+ case notation
   seg = seg.replace(/\s*\|\s*/g, ' ');  // remove | separators (e.g. "00-0 + | 0,2mA")
@@ -230,6 +234,8 @@ const extractBatteryImpedance = (fullText) => {
 
 // Step 1: separate the contact spec from amp/pw/freq values
 const splitContactsFromParams = (line) => {
+  // Strip per-contact current annotations before param detection
+  line = line.replace(/\([\d.,]+\s*m[aA]\)/gi, '').split(/\s*->|→/).shift().trim();
   const numRe = /\b(\d+[.,]\d+|\d+)\s*(%|m[aA]|[Vv](?![A-Za-z])|ms(?![a-zA-Z])|pw(?![a-zA-Z])|[Hh]z|µs|us(?![a-zA-Z]))?/g;
   const paramNums = [];
   let m;
@@ -452,7 +458,7 @@ const parseProgramming = (rawText, tipoEletrodo = '4-ring') => {
     if (!line) continue;
 
     // Skip comment/decision lines that start with - or • or #
-    if (/^[\-•#]/.test(line) && !/^[-]{2,}/.test(line)) continue;
+    if (/^[\-•#]/.test(line) && !/^[-]{2,}/.test(line) && !/grupo/i.test(line)) continue;
 
     // Group header: "Grupo A", "GRUPO B (EM USO...)", "A:", "A- SEGURANÇA", bare "B"/"C"/"D"
     const gm =
@@ -499,7 +505,28 @@ const parseProgramming = (rawText, tipoEletrodo = '4-ring') => {
     const hasAmpInLine = (s) =>
       /[\d][\d.,]*\s*(?:m[aA]|[Vv](?![A-Za-z])|[µu]s|ms(?![a-zA-Z])|pw(?![a-zA-Z])|[Hh]z)/.test(s);
 
-    // "ESQ ...", "DIR ...", "E -> ...", "D -> ..." — explicit known prefixes (no amp guard needed)
+    // FIX P3a: "E/D [0+- contact_string]" — bare side prefix + contacts, no colon/arrow
+    // Must precede mEsqDir to avoid first-dash-eating on "E --00 ..."
+    const mSideContact = hasAmpInLine(line) && line.match(/^([ED])\s+([0+\-]{2,}\s*.*)$/i);
+    if (mSideContact) {
+      push(currentGroup, parseSide(mSideContact[1]), parseParams(mSideContact[2]));
+      continue;
+    }
+
+    // FIX P1: "E/D L[digit]..." — bare side prefix + named contact (e.g. "E L4 100% 1,5mA")
+    const mSideNamed = hasAmpInLine(line) && line.match(/^([ED])\s+([LRlr]\d.+)$/i);
+    if (mSideNamed) {
+      const sideN = parseSide(mSideNamed[1]);
+      const nc = parseNamedContactLine(mSideNamed[2].trim(), tipoEletrodo);
+      if (nc && (nc.amp > 0 || nc.pw || nc.freq)) {
+        push(currentGroup, sideN, { contatos: nc.contatos, amp: nc.amp, pw: nc.pw, freq: nc.freq });
+      } else {
+        push(currentGroup, sideN, parseParams(mSideNamed[2]));
+      }
+      continue;
+    }
+
+        // "ESQ ...", "DIR ...", "E -> ...", "D -> ..." — explicit known prefixes (no amp guard needed)
     // Generic: any prefix ending in E/L (left) or D/R (right) before separator,
     //          only if the rest of the line contains an amplitude value
     const mEsqDir = line.match(/^(ESQ|DIR|ESQUERDO|DIREITO)\s+(.+)/i)
@@ -515,7 +542,7 @@ const parseProgramming = (rawText, tipoEletrodo = '4-ring') => {
       const side = (lastChar === 'E' || lastChar === 'L') ? 'L' : 'R';
       const rest = (mEsqDir[2] || '').trim();
       // Try named contact parser first (e.g. "L4 1,6mA" or "L3 30% L4 70% 3,0mA")
-      if (/^[LRlr]?\d/.test(rest.trim())) {
+      if (/^[LRlr]\d/.test(rest.trim())) {
         // Named contact format — build a fake "L" or "R" prefix based on side
         const fakePrefix = side === 'L' ? 'L' : 'R';
         // Replace any leading L/R with the correct side prefix
@@ -548,7 +575,7 @@ const parseProgramming = (rawText, tipoEletrodo = '4-ring') => {
   }
 
   // "Lead E/D1/E2" — numbered interleaving leads: treat as same side, will be second program
-  const interlM = line.match(/^Lead\s+([ED])([12])\s+(.+)/i);
+  const interlM = line.match(/^(?:Lead\s+)?([ED])([12])\s+(.+)/i);
   if (interlM) {
     const side = parseSide(interlM[1]);
     push(currentGroup, side, parseParams(interlM[3])); continue;

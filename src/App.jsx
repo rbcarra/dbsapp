@@ -12,6 +12,7 @@ import { TimelineHistorico } from './DisplayComponents';
 import { ExtractorModal } from './ExtractorComponents';
 import { UPDRSModal } from './UPDRSComponents';
 import { ScalesModal } from './ScalesComponents';
+import { JSONImportModal } from './JSONImportModal';
 import { LEDCalculator, TEEDCalculator } from './CalculadorasTab';
 import { ReceitasSection } from './ReceitasTab';
 
@@ -58,6 +59,11 @@ export default function App() {
   const [cyclingL, setCyclingL] = useState(false);
   const [cyclingR, setCyclingR] = useState(false);
   const [tendenciasEstimulacao, setTendenciasEstimulacao] = useState("");
+  const [dispositivoInfo, setDispositivoInfo] = useState({
+    fabricante: '', modeloIPG: '', modeloEletrodoE: '', modeloEletrodoD: '',
+    alvoAnatomicоE: '', alvoAnatomicоD: '',
+    dataImplante: '', dataTrocaIPG: '',
+  });
   const [enderecoSalvo, setEnderecoSalvo] = useState("");
   const [prescricoesSalvas, setPrescricoesSalvas] = useState({});
   const [customDocs, setCustomDocs] = useState([]);
@@ -78,9 +84,11 @@ export default function App() {
     const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
   });
   const [showExtrator, setShowExtrator] = useState(false);
+  const [confirmNewSession, setConfirmNewSession] = useState(null); // null | 'copy' | 'empty'
   const [showHistoricoText, setShowHistoricoText] = useState(false);
   const [showUPDRS, setShowUPDRS] = useState(false);
   const [showScales, setShowScales] = useState(false);
+  const [showJSONImport, setShowJSONImport] = useState(false);
   const [structuralMapL, setStructuralMapL] = useState(null);
   const [structuralMapR, setStructuralMapR] = useState(null);
   const [autoSaveStatus, setAutoSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
@@ -220,6 +228,7 @@ export default function App() {
           if (d.marcadoresClinicosL) setMarcadoresClinicosL(d.marcadoresClinicosL);
           if (d.marcadoresClinicosR) setMarcadoresClinicosR(d.marcadoresClinicosR);
           if (d.tendenciasEstimulacao !== undefined) setTendenciasEstimulacao(d.tendenciasEstimulacao);
+          if (d.dispositivoInfo) setDispositivoInfo(d.dispositivoInfo);
           if (d.enderecoSalvo !== undefined) setEnderecoSalvo(d.enderecoSalvo);
           if (d.prescricoesSalvas) setPrescricoesSalvas(d.prescricoesSalvas);
           if (d.customDocs) setCustomDocs(d.customDocs);
@@ -250,7 +259,7 @@ export default function App() {
     if (!user || !activePatient || isInitializing || showLoginModal) return;
     const timer = setTimeout(() => {
       setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'temp_sessions', activePatient.id), {
-        tipoEletrodo, modoAmplitude, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
+        tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
         voltagemBateria, impedanciaL, impedanciaR, cyclingL, cyclingR,
         marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao,
         enderecoSalvo, prescricoesSalvas, customDocs,
@@ -263,7 +272,7 @@ export default function App() {
 
   const historicoReal = useMemo(() => {
     const map = new Map();
-    sessions.filter(s => s.type === 'active').forEach(sess => {
+    sessions.filter(s => s.type === 'active' && s.id !== editingSessionId).forEach(sess => {
       try {
       Object.entries(sess.dadosGrupos || {}).forEach(([nomeGrupo, grupo]) => {
         ['L', 'R'].forEach(lado => {
@@ -304,7 +313,7 @@ export default function App() {
   // Acumula todos os marcadores clínicos de todas as sessões ativas (igual ao historicoReal)
   const marcadoresHistoricos = useMemo(() => {
     const todos = { L: [], R: [] };
-    sessions.filter(s => s.type === 'active').forEach(sess => {
+    sessions.filter(s => s.type === 'active' && s.id !== editingSessionId).forEach(sess => {
       try {
         ['L', 'R'].forEach(lado => {
           const chave = lado === 'L' ? 'marcadoresClinicosL' : 'marcadoresClinicosR';
@@ -329,7 +338,7 @@ export default function App() {
           patientId: activePatient.id,
           timestamp: sessions.find(s => s.id === editingSessionId)?.timestamp || Date.now(),
           type: 'active',
-          tipoEletrodo, modoAmplitude, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
+          tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
           voltagemBateria, impedanciaL, impedanciaR, cyclingL, cyclingR,
           marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao
         };
@@ -809,7 +818,7 @@ export default function App() {
       patientId: activePatient.id, 
       timestamp: modoAtualizar && editingSessionId ? (sessions.find(s => s.id === editingSessionId)?.timestamp || Date.now()) : Date.now(),
       type: 'active',
-      tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
+      tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
       voltagemBateria, impedanciaL, impedanciaR, cyclingL, cyclingR,
       marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao
     };
@@ -852,6 +861,17 @@ export default function App() {
     }
   };
 
+  // Wrappers that check for recent session before creating
+  const tryCreateSession = (mode) => {
+    const ativos = sessions.filter(s => s.type === 'active');
+    const lastActive = ativos[0];
+    const isRecent = lastActive && !editingSessionId &&
+      (Date.now() - (lastActive.timestamp || 0)) < 3 * 60 * 60 * 1000;
+    if (isRecent) { setConfirmNewSession(mode); return; }
+    if (mode === 'copy') handleSalvarSessao(false);
+    else handleCriarSessaoVazia();
+  };
+
   // Create a fresh empty session
   const handleCriarSessaoVazia = async () => {
     if (!user || !activePatient) return;
@@ -861,7 +881,10 @@ export default function App() {
                           C:{L:[makeEmpty()],R:[makeEmpty()]}, D:{L:[makeEmpty()],R:[makeEmpty()]} };
     const sessionData = {
       patientId: activePatient.id, timestamp: Date.now(), type: 'active',
-      tipoEletrodo: '4-ring', dadosGrupos: emptyGrupos,
+      tipoEletrodo: '4-ring', modoAmplitude: 'mA',
+      dispositivoInfo: { fabricante:'', modeloIPG:'', modeloEletrodoE:'', modeloEletrodoD:'',
+        alvoAnatomicоE:'', alvoAnatomicоD:'', dataImplante:'', dataTrocaIPG:'' },
+      dadosGrupos: emptyGrupos,
       clinica: { tremor:0, rigidez:0, bradicinesia:0 },
       efeitosColaterais: { L:[], R:[] }, notasLivres: '', resumoSessao: '',
       voltagemBateria: '', impedanciaL: '', impedanciaR: '',
@@ -1000,25 +1023,33 @@ export default function App() {
     else setMarcadoresClinicosR(prev => prev.filter(m => m.config !== config));
   };
 
-  // Grupos com ao menos uma sessão ativa registrada
+  // Sessão de referência para o bloco "Programação Anterior" e feedback de grupos.
+  // Regra: sempre é a sessão imediatamente ANTERIOR à que está sendo editada.
+  //   - Editando sessão mais recente → usa sessions[1] (penúltima)
+  //   - Editando sessão mais antiga  → null (primeira sessão, sem anterior)
+  //   - Sem editingSessionId (rascunho) → usa sessions[0] (mais recente salva)
+  const sessaoReferencia = useMemo(() => {
+    const ativos = sessions.filter(s => s.type === 'active').sort((a,b) => b.timestamp - a.timestamp);
+    if (ativos.length === 0) return null;
+    if (!editingSessionId) return ativos[0]; // rascunho → referência é a mais recente
+    const idx = ativos.findIndex(s => s.id === editingSessionId);
+    if (idx === -1) return ativos[0]; // não encontrada → fallback mais recente
+    return ativos[idx + 1] ?? null;   // anterior cronologicamente (null = primeira)
+  }, [sessions, editingSessionId]);
+
+  // Grupos com ao menos uma sessão ativa registrada (baseado em sessaoReferencia)
   const gruposComSessao = useMemo(() => {
-    const ativos = sessions.filter(s => s.type === 'active');
-    if (ativos.length === 0) return [];
-    const ultima = ativos[0]; // sessions já ordenadas por data desc
+    if (!sessaoReferencia) return [];
     return ['A','B','C','D'].filter(g => {
-      const gd = ultima.dadosGrupos?.[g];
+      const gd = sessaoReferencia.dadosGrupos?.[g];
       if (!gd) return false;
-      const lAtivo = (gd.L || []).some(p => (p.amp || 0) > 0);
-      const rAtivo = (gd.R || []).some(p => (p.amp || 0) > 0);
-      return lAtivo && rAtivo;
+      return (gd.L || []).some(p => (p.amp || 0) > 0) && (gd.R || []).some(p => (p.amp || 0) > 0);
     });
-  }, [sessions]);
+  }, [sessaoReferencia]);
 
   const handleEfeitoGrupo = async (grupo, efeito, textoEfeito) => {
-    if (!user || !activePatient) return;
-    const ativos = sessions.filter(s => s.type === 'active');
-    if (ativos.length === 0) return;
-    const ultima = ativos[0];
+    if (!user || !activePatient || !sessaoReferencia) return;
+    const ultima = sessaoReferencia;
 
     // Gerar texto da programação do grupo (E e D)
     const ordem = ORDEM_TEXTO_BAIXO_CIMA[ultima.tipoEletrodo || '4-ring'];
@@ -1456,14 +1487,14 @@ ${progTexto}Avaliação: ${textoEfeito}
                 💾 Salvar Sessão
               </button>
             ) : (
-              <button onClick={() => handleSalvarSessao(false)}
+              <button onClick={() => tryCreateSession('copy')}
                 className="px-3 py-1.5 rounded font-bold text-sm transition-colors shadow-sm whitespace-nowrap bg-indigo-600 hover:bg-indigo-700 text-white"
                 title="Cria nova sessão com os dados atuais copiados">
                 💾 Criar nova sessão copiando dados
               </button>
             );
           })()}
-          <button onClick={handleCriarSessaoVazia}
+          <button onClick={() => tryCreateSession('empty')}
             className="px-3 py-1.5 rounded font-bold text-sm transition-colors shadow-sm whitespace-nowrap bg-slate-600 hover:bg-slate-700 text-white"
             title="Cria sessão nova completamente vazia">
             ✦ Criar sessão vazia
@@ -1477,6 +1508,9 @@ ${progTexto}Avaliação: ${textoEfeito}
           </button>
           <button onClick={() => setShowExtrator(true)} className="px-3 py-1.5 rounded font-bold text-sm transition-colors shadow-sm whitespace-nowrap bg-amber-500 hover:bg-amber-600 text-white">
             📄 Extrator
+          </button>
+          <button onClick={() => setShowJSONImport(true)} className="px-3 py-1.5 rounded font-bold text-sm transition-colors shadow-sm whitespace-nowrap bg-teal-600 hover:bg-teal-700 text-white">
+            📥 Importar JSON
           </button>
         </div>
       </header>
@@ -1496,6 +1530,35 @@ ${progTexto}Avaliação: ${textoEfeito}
       )}
 
       <main className="p-4 w-full flex-1 flex flex-col gap-3 overflow-y-auto">
+
+        {/* BANNER DE SESSÃO */}
+        {(() => {
+          const ativos = sessions.filter(s => s.type === 'active').sort((a,b) => b.timestamp - a.timestamp);
+          const sesAtual = editingSessionId ? ativos.find(s => s.id === editingSessionId) : null;
+          const isMostRecent = ativos.length > 0 && ativos[0].id === editingSessionId;
+          const isToday = sesAtual && new Date(sesAtual.timestamp).toDateString() === new Date().toDateString();
+          const label = !editingSessionId
+            ? '📝 Rascunho não salvo'
+            : isMostRecent && isToday
+              ? '📅 Sessão de hoje'
+              : `📅 Sessão de ${formatarData(sesAtual?.timestamp || 0)}`;
+          const colorCls = !editingSessionId
+            ? 'bg-amber-50 border-amber-200 text-amber-700'
+            : isMostRecent
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+              : 'bg-indigo-50 border-indigo-200 text-indigo-700';
+          return (
+            <div className={`flex items-center justify-between px-3 py-1.5 rounded-lg border text-xs font-bold mb-1 ${colorCls}`}>
+              <span>{label}</span>
+              {sesAtual && (
+                <span className="font-normal text-[10px] opacity-70">
+                  {formatarData(sesAtual.timestamp)}
+                  {!isMostRecent && ' — sessão anterior'}
+                </span>
+              )}
+            </div>
+          );
+        })()}
 
         {/* TAB BAR */}
         <div className="flex gap-1 mb-3 border-b border-slate-200 pb-1">
@@ -1538,11 +1601,15 @@ ${progTexto}Avaliação: ${textoEfeito}
           onToggle={() => toggleBloco('progAnterior')}
           corHeader="bg-indigo-50"
         >
-          {gruposComSessao.length === 0 ? (
-            <p className="text-xs text-slate-400 italic">Nenhuma sessão anterior com programação ativa registrada.</p>
+          {(!sessaoReferencia || gruposComSessao.length === 0) ? (
+            <p className="text-xs text-slate-400 italic">
+              {!sessaoReferencia
+                ? 'Esta é a primeira sessão registrada — sem sessão anterior para referência.'
+                : 'Nenhuma sessão anterior com programação ativa registrada.'}
+            </p>
           ) : (() => {
-            const ultima = sessions.filter(s => s.type === 'active')[0];
-            const ordem = ORDEM_TEXTO_BAIXO_CIMA[ultima.tipoEletrodo || '4-ring'];
+            const ultima = sessaoReferencia;
+            const ordem = ORDEM_TEXTO_BAIXO_CIMA[ultima?.tipoEletrodo || '4-ring'];
             const grupoA = ultima.dadosGrupos?.['A'] || {};
 
             // Helper: compare prog config+amp+pw+freq against group A for a given side
@@ -1655,6 +1722,73 @@ ${progTexto}Avaliação: ${textoEfeito}
               ))}
             </div>
           </div>
+          {/* Informações do dispositivo */}
+          {(() => {
+            const di = dispositivoInfo;
+            const setDI = (k, v) => setDispositivoInfo(prev => ({...prev, [k]: v}));
+            const FABRICANTES = ['Medtronic','Boston Scientific','Abbott','PINS','Outro'];
+            const ALVOS = ['STN','GPi','VIM','CM-Pf','NAc','ALIC','Outro'];
+            const inp = "text-xs bg-white border border-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400 w-full";
+            const sel = "text-xs bg-white border border-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400 w-full";
+            const lbl = "text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-0.5";
+            return (
+              <details className="mb-3 group">
+                <summary className="cursor-pointer text-[10px] font-bold text-slate-500 hover:text-slate-700 select-none flex items-center gap-1">
+                  <span className="group-open:rotate-90 transition-transform inline-block">▶</span>
+                  🔧 Dispositivo
+                  {(di.fabricante || di.modeloIPG || di.alvoAnatomicоE) && (
+                    <span className="ml-2 font-normal text-slate-400 truncate">
+                      {[di.fabricante, di.modeloIPG, di.alvoAnatomicоE && `Alvo:${di.alvoAnatomicоE}`].filter(Boolean).join(' · ')}
+                    </span>
+                  )}
+                </summary>
+                <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2 p-3 bg-slate-50 rounded-xl border border-slate-100">
+                  <div>
+                    <label className={lbl}>Fabricante</label>
+                    <select value={di.fabricante} onChange={e=>setDI('fabricante',e.target.value)} className={sel}>
+                      <option value="">—</option>
+                      {FABRICANTES.map(f=><option key={f}>{f}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={lbl}>Modelo IPG</label>
+                    <input value={di.modeloIPG} onChange={e=>setDI('modeloIPG',e.target.value)} placeholder="ex: Percept PC" className={inp}/>
+                  </div>
+                  <div>
+                    <label className={lbl}>Eletrodo E</label>
+                    <input value={di.modeloEletrodoE} onChange={e=>setDI('modeloEletrodoE',e.target.value)} placeholder="ex: 3389" className={inp}/>
+                  </div>
+                  <div>
+                    <label className={lbl}>Eletrodo D</label>
+                    <input value={di.modeloEletrodoD} onChange={e=>setDI('modeloEletrodoD',e.target.value)} placeholder="ex: DB-2202" className={inp}/>
+                  </div>
+                  <div>
+                    <label className={lbl}>Alvo E</label>
+                    <select value={di.alvoAnatomicоE} onChange={e=>setDI('alvoAnatomicоE',e.target.value)} className={sel}>
+                      <option value="">—</option>
+                      {ALVOS.map(a=><option key={a}>{a}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={lbl}>Alvo D</label>
+                    <select value={di.alvoAnatomicоD} onChange={e=>setDI('alvoAnatomicоD',e.target.value)} className={sel}>
+                      <option value="">—</option>
+                      {ALVOS.map(a=><option key={a}>{a}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={lbl}>Data implante</label>
+                    <input type="date" value={di.dataImplante} onChange={e=>setDI('dataImplante',e.target.value)} className={inp}/>
+                  </div>
+                  <div>
+                    <label className={lbl}>Data troca bateria</label>
+                    <input type="date" value={di.dataTrocaIPG} onChange={e=>setDI('dataTrocaIPG',e.target.value)} className={inp}/>
+                  </div>
+                </div>
+              </details>
+            );
+          })()}
+
           {/* Controles de grupo e cópia — movidos do header */}
           <div className="flex flex-wrap items-center gap-2 mb-3 pb-3 border-b border-slate-100">
             <div className="flex items-center bg-slate-100 rounded px-2 py-1.5 border border-slate-200">
@@ -2117,6 +2251,62 @@ ${progTexto}Avaliação: ${textoEfeito}
       })()}
 
 
+      {/* CONFIRM NEW SESSION MODAL */}
+      {confirmNewSession && (() => {
+        const ativos = sessions.filter(s => s.type === 'active').sort((a,b) => b.timestamp - a.timestamp);
+        const recente = ativos[0];
+        const minAtras = recente ? Math.round((Date.now() - recente.timestamp) / 60000) : 0;
+        const abrirRecente = () => {
+          if (!recente) return;
+          setEditingSessionId(recente.id);
+          setTipoEletrodo(recente.tipoEletrodo || '4-ring');
+          setModoAmplitude(recente.modoAmplitude || 'mA');
+          try { setDadosGrupos(capPrograms(recente.dadosGrupos) || recente.dadosGrupos); } catch(e){}
+          setClinica(recente.clinica || { tremor:0, rigidez:0, bradicinesia:0 });
+          setEfeitosColaterais(recente.efeitosColaterais || { L:[], R:[] });
+          setNotasLivres(recente.notasLivres || '');
+          setResumoSessao(recente.resumoSessao || '');
+          setTendenciasEstimulacao(recente.tendenciasEstimulacao || '');
+          setVoltagemBateria(recente.voltagemBateria || '');
+          setImpedanciaL(recente.impedanciaL || '');
+          setImpedanciaR(recente.impedanciaR || '');
+          setCyclingL(!!recente.cyclingL); setCyclingR(!!recente.cyclingR);
+          setMarcadoresClinicosL(recente.marcadoresClinicosL || []);
+          setMarcadoresClinicosR(recente.marcadoresClinicosR || []);
+          setConfirmNewSession(null);
+        };
+        const prosseguir = () => {
+          setConfirmNewSession(null);
+          if (confirmNewSession === 'copy') handleSalvarSessao(false);
+          else handleCriarSessaoVazia();
+        };
+        return (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4">
+              <h3 className="font-bold text-slate-800 text-base mb-1">Sessão recente detectada</h3>
+              <p className="text-sm text-slate-500 mb-5">
+                Já existe uma sessão salva há <strong>{minAtras} min</strong> ({formatarData(recente?.timestamp || 0)}).
+                Deseja abrir essa sessão ou criar uma nova?
+              </p>
+              <div className="flex flex-col gap-2">
+                <button onClick={abrirRecente}
+                  className="w-full py-2.5 rounded-xl font-bold text-sm bg-indigo-600 hover:bg-indigo-700 text-white transition-colors">
+                  📂 Abrir sessão recente
+                </button>
+                <button onClick={prosseguir}
+                  className="w-full py-2.5 rounded-xl font-bold text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors">
+                  {confirmNewSession === 'copy' ? '📋 Criar nova copiando dados' : '✦ Criar nova sessão vazia'}
+                </button>
+                <button onClick={() => setConfirmNewSession(null)}
+                  className="text-xs text-slate-400 hover:text-slate-600 underline mt-1 self-center">
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* MODAL: HISTÓRICO COMPLETO DE PROGRAMAÇÃO */}
       {showHistoricoText && (() => {
         const sessionsAtivas = sessions.filter(s => s.type === 'active')
@@ -2264,6 +2454,21 @@ ${progTexto}Avaliação: ${textoEfeito}
       )}
 
       {/* EXTRATOR DE PRONTUÁRIOS */}
+      {showJSONImport && (
+        <JSONImportModal
+          onClose={() => setShowJSONImport(false)}
+          user={user}
+          patients={patients}
+          onPatientCreated={(p) => {
+            setPatients(prev => [p, ...prev]);
+            setActivePatient(p);
+          }}
+          onImportDone={() => {
+            setShowJSONImport(false);
+            showToast('Importação JSON concluída!');
+          }}
+        />
+      )}
       {showExtrator && (
         <ExtractorModal
           onClose={() => setShowExtrator(false)}
