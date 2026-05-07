@@ -1,4 +1,6 @@
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
+import { ORDEM_TEXTO_BAIXO_CIMA, getContatosIniciais } from './constants';
+import { ProgrammingEditor } from './ProgrammingEditor';
 
 // ─── PARSER ────────────────────────────────────────────────────────────────
 
