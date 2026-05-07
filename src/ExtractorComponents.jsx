@@ -1242,6 +1242,8 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                  impedanciaR: impedanciaR || (impRFromProg ? String(impRFromProg) : ''),
                  marcadoresClinicosL: marcadoresL,
                  marcadoresClinicosR: marcadoresR,
+                 cyclingL: !!(d.cyclingL),
+                 cyclingR: !!(d.cyclingR),
                  dateEstimated: !d.date };
       });
       // Estimate dates for sessions without a detected date
@@ -1448,8 +1450,8 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
       {/* ══ EXTRACT ═════════════════════════════════════════════════════════ */}
       {phase==='extract' && (
         <div className="flex-1 flex gap-0 min-h-0 overflow-hidden">
-          {/* Left: text */}
-          <div className="flex-1 flex flex-col min-h-0 border-r border-slate-800">
+          {/* Left: text — reduced to make room for 4-group editor */}
+          <div className="flex flex-col min-h-0 border-r border-slate-800" style={{width:'28%',minWidth:'16rem'}}>
             <div className="bg-slate-900 border-b border-slate-800 px-4 py-2 flex items-center justify-between shrink-0">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
                 Consulta {consultIdx+1} / {consultations.length}
@@ -1466,7 +1468,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
           </div>
 
           {/* Right: form */}
-          <div className="w-84 shrink-0 flex flex-col bg-slate-900 min-h-0 overflow-y-auto" style={{width:'22rem'}}>
+          <div className="shrink-0 flex flex-col bg-slate-900 min-h-0 overflow-y-auto" style={{width:'42rem',minWidth:'42rem'}}>
             {/* Fields — sempre editáveis */}
             <div className="border-b border-slate-800 p-3 flex flex-col gap-2">
               <div className="flex items-center justify-between mb-1">
@@ -1631,6 +1633,12 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                     }}
                     tipoEletrodo={tipoEletrodoGlobal}
                     sessaoAnteriorGrupos={prevGrupos}
+                    cyclingL={!!(captured[consultIdx]?.cyclingL)}
+                    cyclingR={!!(captured[consultIdx]?.cyclingR)}
+                    onCyclingChange={(side, val) => setCaptured(prev => ({
+                      ...prev,
+                      [consultIdx]: {...(prev[consultIdx]||{}), [side==='L'?'cyclingL':'cyclingR']: val}
+                    }))}
                   />
                 </div>
               );
