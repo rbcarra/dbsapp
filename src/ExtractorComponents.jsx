@@ -435,6 +435,39 @@ const isImpedanceOnlyLine = (text) => {
   return hasImpedance && !hasContacts;
 };
 
+// ─── CONVERT PARSED GRUPOS (mirrors App.jsx logic, self-contained here) ──────
+const convertParsedGrupos = (parsed, tipoEl) => {
+  const tipo = tipoEl || '4-ring';
+  const result = {};
+  Object.entries(parsed || {}).forEach(([g, grupo]) => {
+    result[g] = {};
+    ['L', 'R'].forEach(lado => {
+      result[g][lado] = (grupo[lado] || []).map(prog => {
+        if (prog.contatos && typeof prog.contatos === 'object' && !Array.isArray(prog.contatos))
+          return prog;
+        const contatosStr = prog.contatos || '';
+        const ordem = ORDEM_TEXTO_BAIXO_CIMA[tipo];
+        const novosContatos = getContatosIniciais(tipo);
+        const clean = contatosStr.replace(/([0+\-])\s+(?=[0+\-])/g, '$1');
+        const chars = [...clean];
+        if (chars.length === ordem.length) {
+          chars.forEach((ch, i) => {
+            if (ch === '-' || ch === '+') novosContatos[ordem[i]] = { state: ch, perc: 100 };
+          });
+        }
+        return { ...prog, contatos: novosContatos };
+      });
+    });
+  });
+  // Cap to 2 programs per side
+  Object.values(result).forEach(g => {
+    ['L','R'].forEach(side => {
+      if (Array.isArray(g[side]) && g[side].length > 2) g[side] = g[side].slice(0,2);
+    });
+  });
+  return result;
+};
+
 const parseProgramming = (rawText, tipoEletrodo = '4-ring') => {
   if (!rawText) return {};
   const result = {};
