@@ -25,6 +25,7 @@ import { auth, db, appId } from './firebase';
 // --- APLICATIVO PRINCIPAL ---
 
 export default function App() {
+
   const [user, setUser] = useState(null);
   const [isInitializing, setIsInitializing] = useState(true);
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -392,7 +393,12 @@ export default function App() {
   const copiarConsultaClipboard = () => {
     const hoje = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
     const programacaoTexto = gerarTextoProntuario(dadosGrupos, tipoEletrodo);
-      // cycling is now per-program (see dadosGrupos[g][side][idx].cycling)
+    const cyclingStr = (() => {
+      const sides = [];
+      if (Object.values(dadosGrupos).some(g => g.L?.some(p => p.cycling))) sides.push('Esquerdo');
+      if (Object.values(dadosGrupos).some(g => g.R?.some(p => p.cycling))) sides.push('Direito');
+      return sides.join(', ') || 'Não';
+    })();
     const texto = [
       '=== SESSÃO DE PROGRAMAÇÃO ONLINE ===',
       `Data: ${hoje}`,
@@ -710,7 +716,7 @@ export default function App() {
         const cabecalho = [
           'Nome', 'HC',
           'Data', 'Resumo', 'Eletrodo', 'Bateria(V)',
-          'ImpedanciaE', 'ImpedanciaD', 'CyclingE', 'CyclingD',
+          'ImpedanciaE', 'ImpedanciaD',
           ...gruposKeys.flatMap(g => [['L','E'],['R','D']].flatMap(([l, ln]) => [
             `Grupo${g}_Lead${ln}_Contatos`, `Grupo${g}_Lead${ln}_Amp(mA)`,
             `Grupo${g}_Lead${ln}_PW(us)`, `Grupo${g}_Lead${ln}_Freq(Hz)`,
@@ -1133,7 +1139,7 @@ ${progTexto}Avaliação: ${textoEfeito}
     const cabecalho = [
       'Nome', 'HC',
       'Data', 'Resumo', 'Tendencias', 'ModoAmplitude', 'Eletrodo', 'Bateria(V)',
-      'ImpedanciaE', 'ImpedanciaD', 'CyclingE', 'CyclingD',
+      'ImpedanciaE', 'ImpedanciaD',
       'Clinica_Tremor', 'Clinica_Rigidez', 'Clinica_Bradicinesia',
       ...gruposKeys.flatMap(g => lados.flatMap(l => {
         const ladoNome = l === 'L' ? 'E' : 'D';
@@ -1141,10 +1147,12 @@ ${progTexto}Avaliação: ${textoEfeito}
           `Grupo${g}_Lead${ladoNome}_Contatos`,    `Grupo${g}_Lead${ladoNome}_Amp(mA)`,
           `Grupo${g}_Lead${ladoNome}_PW(us)`,      `Grupo${g}_Lead${ladoNome}_Freq(Hz)`,
           `Grupo${g}_Lead${ladoNome}_Efeito`,
+          `Grupo${g}_Lead${ladoNome}_Cycling`,
           // Interleaving program (index 1)
           `Grupo${g}_Lead${ladoNome}2_Contatos`,   `Grupo${g}_Lead${ladoNome}2_Amp(mA)`,
           `Grupo${g}_Lead${ladoNome}2_PW(us)`,     `Grupo${g}_Lead${ladoNome}2_Freq(Hz)`,
           `Grupo${g}_Lead${ladoNome}2_Efeito`,
+          `Grupo${g}_Lead${ladoNome}2_Cycling`,
         ];
       })),
       'EfeitosColateraisE', 'EfeitosColateraisD',
@@ -1192,8 +1200,8 @@ ${progTexto}Avaliação: ${textoEfeito}
         lados.forEach(l => {
           const prog0 = s.dadosGrupos?.[g]?.[l]?.[0];
           const prog1 = s.dadosGrupos?.[g]?.[l]?.[1];
-          row.push(contatosToCSV(prog0), prog0?.amp ?? '', prog0?.pw ?? '', prog0?.freq ?? '', prog0?.efeito || '');
-          row.push(contatosToCSV(prog1), prog1?.amp ?? '', prog1?.pw ?? '', prog1?.freq ?? '', prog1?.efeito || '');
+          row.push(contatosToCSV(prog0), prog0?.amp ?? '', prog0?.pw ?? '', prog0?.freq ?? '', prog0?.efeito || '', prog0?.cycling ? 'Sim' : 'Não');
+          row.push(contatosToCSV(prog1), prog1?.amp ?? '', prog1?.pw ?? '', prog1?.freq ?? '', prog1?.efeito || '', prog1?.cycling ? 'Sim' : 'Não');
         });
       });
       const ec = s.efeitosColaterais;
@@ -1321,8 +1329,7 @@ ${progTexto}Avaliação: ${textoEfeito}
           voltagemBateria:        get('Bateria(V)'),
           impedanciaL:            get('ImpedanciaE'),
           impedanciaR:            get('ImpedanciaD'),
-          // cycling is now per-program; parse compact "A/E;B/D1" format
-          _cyclingStr: get('Cycling') || '',
+
           marcadoresClinicosL:    parseMarcStr(get('MarcadoresE')),
           marcadoresClinicosR:    parseMarcStr(get('MarcadoresD')),
         });
@@ -1703,13 +1710,7 @@ ${progTexto}Avaliação: ${textoEfeito}
                         {mostrarBotoes && (
                           <div className="flex flex-wrap gap-1">
                             {[
-                              ['bom',         'Melhor grupo',  'bg-emerald-500 hover:bg-emerald-600 text-white'],
-                              ['neutro',      'Bom / Mantido', 'bg-blue-500 hover:bg-blue-600 text-white'],
-                              ['pouco',       'Pouco efeito',  'bg-slate-400 hover:bg-slate-500 text-white'],
-                              ['nao_testado', 'Não testado',   'bg-transparent border border-dashed border-slate-400 text-slate-500 hover:bg-slate-50'],
-                              ['col_marcha',  'Col. marcha',  'bg-orange-500 hover:bg-orange-600 text-white'],
-                              ['col_fala',    'Col. fala',    'bg-purple-500 hover:bg-purple-600 text-white'],
-                              ['col_outros',  'Col. outros',  'bg-rose-700 hover:bg-rose-800 text-white'],
+                              ...EFEITO_OPTS.map(o => [o.val, o.label, getEfeitoCor(o.val, 'btnCls')]),
                             ].map(([efVal, label, cls]) => (
                               <button key={label} onClick={() => handleEfeitoGrupo(grupo, efVal, label)}
                                 className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all shadow-sm ${cls}`}>
@@ -1936,7 +1937,6 @@ ${progTexto}Avaliação: ${textoEfeito}
                         configStr={configStr}
                         onAdicionarMarcador={(tipo) => adicionarMarcadorClinico('L', tipo, idx)}
                         onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('L', cfg)}
-                        cycling={false} onToggleCycling={undefined}
                         impedancia={impedanciaL} onImpedanciaChange={setImpedanciaL}
                         onUpdateProg={atualizarPrograma} onUpdateState={atualizarContatoState} onUpdatePerc={atualizarContatoPerc}
                         ignorarPerc={!considerarAmplitude}
@@ -2006,7 +2006,6 @@ ${progTexto}Avaliação: ${textoEfeito}
                         configStr={configStr}
                         onAdicionarMarcador={(tipo) => adicionarMarcadorClinico('R', tipo, idx)}
                         onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('R', cfg)}
-                        cycling={false} onToggleCycling={undefined}
                         impedancia={impedanciaR} onImpedanciaChange={setImpedanciaR}
                         onUpdateProg={atualizarPrograma} onUpdateState={atualizarContatoState} onUpdatePerc={atualizarContatoPerc}
                         ignorarPerc={!considerarAmplitude}

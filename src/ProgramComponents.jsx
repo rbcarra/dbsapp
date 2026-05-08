@@ -124,10 +124,7 @@ const VisualizadorEletrodo = ({ lado, tipoEletrodo, contatos, onChangeState, onC
 
 
 
-const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, modoAmplitude, onUpdateProg, onUpdateState, onUpdatePerc, historicoRef, isMatchExato, marcadores, marcadoresRing, marcadoresTodosL, historicoTodos, structuralMap, onAdicionarMarcador, onDesfazerMarcadores, impedancia, onImpedanciaChange, impedanciaL, impedanciaR, ignorarPerc }) => {
-  // cycling is now per-program — read from programa.cycling
-  const cycling = !!programa.cycling;
-  const onToggleCycling = () => onUpdateProg(lado, index, 'cycling', !programa.cycling);
+const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, modoAmplitude, onUpdateProg, onUpdateState, onUpdatePerc, historicoRef, isMatchExato, marcadores, marcadoresRing, marcadoresTodosL, historicoTodos, structuralMap, onAdicionarMarcador, onDesfazerMarcadores, cycling, onToggleCycling, impedancia, onImpedanciaChange, impedanciaL, impedanciaR, ignorarPerc }) => {
   const listaColaterais = ["Parestesia", "Cápsula", "Disartria", "Outros"];
   const listaPositivos = ["tremor", "rigidez", "bradicinesia"];
   const configStr = getStringConfig(programa.contatos, ignorarPerc);

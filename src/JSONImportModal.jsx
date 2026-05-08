@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import { collection, addDoc, doc, setDoc } from 'firebase/firestore';
-import { getContatosIniciais, ORDEM_TEXTO_BAIXO_CIMA } from './constants';
+import { getContatosIniciais, ORDEM_TEXTO_BAIXO_CIMA, formatarData } from './constants';
 import { db, appId } from './firebase';
 
 // ─── CONTACT MAPPER ──────────────────────────────────────────────────────────

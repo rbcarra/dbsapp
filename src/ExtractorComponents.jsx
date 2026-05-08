@@ -2,6 +2,18 @@ import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react'
 import { ORDEM_TEXTO_BAIXO_CIMA, getContatosIniciais, EFEITO_OPTS, convertParsedGrupos } from './constants';
 import { ProgrammingEditor } from './ProgrammingEditor';
 
+// Button classes for extractor feedback buttons (dark theme)
+const efeitoExtCls = (val) => ({
+  bom:         'bg-emerald-600 hover:bg-emerald-500 text-white',
+  neutro:      'bg-blue-600 hover:bg-blue-500 text-white',
+  pouco:       'bg-slate-500 hover:bg-slate-400 text-white',
+  nao_testado: 'bg-transparent border border-dashed border-slate-500 text-slate-400 hover:bg-slate-800',
+  col_marcha:  'bg-orange-600 hover:bg-orange-500 text-white',
+  col_fala:    'bg-purple-600 hover:bg-purple-500 text-white',
+  col_outros:  'bg-rose-700 hover:bg-rose-600 text-white',
+}[val] || 'bg-slate-500 hover:bg-slate-400 text-white');
+
+
 // ─── PARSER ────────────────────────────────────────────────────────────────
 
 const DATE_RE = /\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}/;
