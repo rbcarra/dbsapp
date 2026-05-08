@@ -111,7 +111,7 @@ const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey
             const hType = classifyStim(hContatos, 'directional');
             const isRing = hType === 'ring' || !getDirLevel(h.config);
             const ampEf = calcAmpEfetiva(hContatos, h.amp || 0);
-            const cor = h.efeito === 'bom' ? '#10b981' : h.efeito === 'ruim' ? '#f43f5e' : h.efeito === 'pouco' ? '#94a3b8' : h.efeito === 'nao_testado' ? 'transparent' : h.efeito === 'nao_testado' ? 'transparent' : '#67e8f9';
+            const cor = h.efeito === 'bom' ? '#10b981' : h.efeito === 'pouco' ? '#94a3b8' : h.efeito === 'nao_testado' ? 'transparent' : h.efeito === 'nao_testado' ? 'transparent' : '#67e8f9';
             const opacity = Math.max(0.4, opacidadeMarcador(h.date || 0, sessaoAtualTimestamp || Date.now()));
             const rr = toR(ampEf);
             if (isRing) {
@@ -593,8 +593,7 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
           const hVec = Object.keys(hContatos).length > 0 ? dirVector3D(hContatos, h.amp || 0) : null;
           if (!hVec || !isFinite(hVec.ux) || !isFinite(hVec.uz)) return null;
           const cor = h.efeito === 'bom' ? '#10b981'
-            : h.efeito === 'ruim' ? '#f43f5e'
-            : h.efeito === 'pouco' ? '#94a3b8' : '#67e8f9';
+            : h.efeito === 'pouco' ? '#94a3b8' : h.efeito === 'nao_testado' ? 'transparent' : h.efeito === 'col_marcha' ? '#f97316' : h.efeito === 'col_fala' ? '#a855f7' : h.efeito === 'col_outros' ? '#f43f5e' : '#67e8f9';
           const opacity = Math.max(0.35, opacidadeMarcador(h.date || 0, sessaoAtualTimestamp || Date.now()));
           const hr = toR(hVec.amp || 0);
           const hOY = itemOriginY(h.config, showSchematic);

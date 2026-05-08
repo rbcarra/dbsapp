@@ -1868,9 +1868,6 @@ ${progTexto}Avaliação: ${textoEfeito}
                 tipoEletrodo={tipoEletrodo}
                 modoAmplitude={modoAmplitude}
                 sessaoAnteriorGrupos={sessaoReferencia?.dadosGrupos || null}
-                cyclingL={cyclingL}
-                cyclingR={cyclingR}
-                onCyclingChange={(side, val) => side === 'L' ? setCyclingL(val) : setCyclingR(val)}
               />
             </div>
           </details>
