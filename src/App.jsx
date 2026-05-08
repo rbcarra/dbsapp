@@ -5,7 +5,7 @@ import { collection, doc, setDoc, getDoc, onSnapshot, addDoc, deleteDoc, updateD
 import { ORDEM_TEXTO_BAIXO_CIMA, MARCADOR_LETRAS, EFEITO_OPTS, getEfeitoCor,
   opacidadeMarcador, getContatosIniciais, getStringConfig, formatarData,
   convertParsedGrupos, criarProgramaVazio } from './constants';
-import { getDirLevel, dirUnitVector2D, calcAmpEfetiva } from './vectorHelpers';
+import { getDirLevel, dirUnitVector2D, calcAmpEfetiva, classifyStim } from './vectorHelpers';
 import { BlocoColapsavel, LoginModal, PatientSelector, ConfirmDialog } from './PatientComponents';
 import { RenderPrograma } from './ProgramComponents';
 import { TimelineHistorico } from './DisplayComponents';
