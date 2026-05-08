@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ORDEM_TEXTO_BAIXO_CIMA, getContatosIniciais } from './constants';
+import { ORDEM_TEXTO_BAIXO_CIMA, getContatosIniciais, criarProgramaVazio } from './constants';
 
 const noSpin = '[appearance:textfield] [&::-webkit-inner-spin-button]:hidden [&::-webkit-outer-spin-button]:hidden';
 
@@ -84,14 +84,13 @@ const ProgramRow = ({ label, prog, onChange, onRemove, tipoEletrodo, modoAmplitu
 
 // ─── ONE LEAD SECTION (E or D, with interleaving support) ────────────────────
 const LeadSection = ({ sideLabel, progs, onChangeProgs, tipoEletrodo, modoAmplitude }) => {
-  const makeEmpty = () => ({ contatos: getContatosIniciais(tipoEletrodo), amp:0, pw:60, freq:130, efeito:'neutro', cycling:false });
-
+  
   const setProgAt = (idx, newProg) => {
     const next = [...progs];
     next[idx] = newProg;
     onChangeProgs(next);
   };
-  const addInterleave = () => onChangeProgs([...progs, makeEmpty()]);
+  const addInterleave = () => onChangeProgs([...progs, criarProgramaVazio(tipoEletrodo)]);
   const removeAt = (idx) => onChangeProgs(progs.filter((_,i) => i !== idx));
 
   return (
@@ -121,10 +120,9 @@ const LeadSection = ({ sideLabel, progs, onChangeProgs, tipoEletrodo, modoAmplit
 
 // ─── GROUP CARD ───────────────────────────────────────────────────────────────
 const GroupCard = ({ groupLabel, grupo, onChange, tipoEletrodo, modoAmplitude }) => {
-  const makeEmpty = () => ({ contatos: getContatosIniciais(tipoEletrodo), amp:0, pw:60, freq:130, efeito:'neutro', cycling:false });
-  const hasData = (grupo?.L||[]).some(p => p.amp > 0) || (grupo?.R||[]).some(p => p.amp > 0);
+    const hasData = (grupo?.L||[]).some(p => p.amp > 0) || (grupo?.R||[]).some(p => p.amp > 0);
   const setProgs = (side, newProgs) => {
-    const g = { L: grupo?.L || [makeEmpty()], R: grupo?.R || [makeEmpty()] };
+    const g = { L: grupo?.L || [criarProgramaVazio(tipoEletrodo)], R: grupo?.R || [criarProgramaVazio(tipoEletrodo)] };
     onChange({ ...g, [side]: newProgs });
   };
 
@@ -138,7 +136,7 @@ const GroupCard = ({ groupLabel, grupo, onChange, tipoEletrodo, modoAmplitude })
         {[['L','E'],['R','D']].map(([side, lbl]) => (
           <LeadSection key={side}
             sideLabel={lbl}
-            progs={grupo?.[side]?.length ? grupo[side] : [makeEmpty()]}
+            progs={grupo?.[side]?.length ? grupo[side] : [criarProgramaVazio(tipoEletrodo)]}
             onChangeProgs={newProgs => setProgs(side, newProgs)}
             tipoEletrodo={tipoEletrodo}
             modoAmplitude={modoAmplitude}/>
@@ -157,8 +155,7 @@ export const ProgrammingEditor = ({
   const [swapFrom, setSwapFrom] = useState('A');
   const [swapTo,   setSwapTo]   = useState('D');
   const grupos = ['A','B','C','D'];
-  const makeEmpty = () => ({ contatos:getContatosIniciais(tipoEletrodo), amp:0, pw:60, freq:130, efeito:'neutro', cycling:false });
-
+  
   const setGrupo = (g, newGrupo) => setDadosGrupos(prev => ({ ...(prev||{}), [g]: newGrupo }));
 
   const swapGroups = () => {
@@ -166,8 +163,8 @@ export const ProgrammingEditor = ({
     setDadosGrupos(prev => {
       const next = {...(prev||{})};
       [next[swapFrom], next[swapTo]] = [
-        JSON.parse(JSON.stringify(next[swapTo]  || {L:[makeEmpty()],R:[makeEmpty()]})),
-        JSON.parse(JSON.stringify(next[swapFrom]|| {L:[makeEmpty()],R:[makeEmpty()]})),
+        JSON.parse(JSON.stringify(next[swapTo]  || {L:[criarProgramaVazio(tipoEletrodo)],R:[criarProgramaVazio(tipoEletrodo)]})),
+        JSON.parse(JSON.stringify(next[swapFrom]|| {L:[criarProgramaVazio(tipoEletrodo)],R:[criarProgramaVazio(tipoEletrodo)]})),
       ];
       return next;
     });

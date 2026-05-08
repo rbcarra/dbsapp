@@ -1,13 +1,13 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { signInWithCustomToken, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { signInWithCustomToken, onAuthStateChanged, signOut } from 'firebase/auth';
 import { collection, doc, setDoc, getDoc, onSnapshot, addDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 
-import { TIPOS_ELETRODO, ORDEM_TEXTO_BAIXO_CIMA, MARCADOR_LETRAS,
-  opacidadeMarcador, getContatosIniciais, getStringConfig, formatarData } from './constants';
-import { DIR_ANGLES, getDirLevel, parseConfigToContatos, classifyStim,
-  dirUnitVector2D, calcAmpEfetiva, dirVector3D } from './vectorHelpers';
+import { ORDEM_TEXTO_BAIXO_CIMA, MARCADOR_LETRAS, EFEITO_OPTS, getEfeitoCor,
+  opacidadeMarcador, getContatosIniciais, getStringConfig, formatarData,
+  convertParsedGrupos, criarProgramaVazio } from './constants';
+import { getDirLevel, dirUnitVector2D, calcAmpEfetiva } from './vectorHelpers';
 import { BlocoColapsavel, LoginModal, PatientSelector, ConfirmDialog } from './PatientComponents';
-import { VisualizadorEletrodo, RenderPrograma } from './ProgramComponents';
+import { RenderPrograma } from './ProgramComponents';
 import { TimelineHistorico } from './DisplayComponents';
 import { ExtractorModal } from './ExtractorComponents';
 import { UPDRSModal } from './UPDRSComponents';
@@ -38,9 +38,7 @@ export default function App() {
   // States do Prontuário / Sessão
   const [tipoEletrodo, setTipoEletrodo] = useState('4-ring');
   const [modoAmplitude, setModoAmplitude] = useState('mA'); // 'mA' | 'V'
-  const criarProgramaInicial = (tipo = tipoEletrodo) => ({
-    contatos: getContatosIniciais(tipo), amp: 0.0, pw: 60, freq: 130, efeito: 'neutro'
-  });
+  const criarProgramaInicial = (tipo = tipoEletrodo) => criarProgramaVazio(tipo);
   const [grupoAtivo, setGrupoAtivo] = useState('A');
   const [dadosGrupos, setDadosGrupos] = useState({
     A: { L: [criarProgramaInicial()], R: [criarProgramaInicial()] },
@@ -57,8 +55,6 @@ export default function App() {
   const [voltagemBateria, setVoltagemBateria] = useState("");
   const [impedanciaL, setImpedanciaL] = useState("");
   const [impedanciaR, setImpedanciaR] = useState("");
-  const [cyclingL, setCyclingL] = useState(false);
-  const [cyclingR, setCyclingR] = useState(false);
   const [tendenciasEstimulacao, setTendenciasEstimulacao] = useState("");
   const [dispositivoInfo, setDispositivoInfo] = useState({
     fabricante: '', modeloIPG: '', modeloEletrodoE: '', modeloEletrodoD: '',
@@ -230,8 +226,6 @@ export default function App() {
           if (d.voltagemBateria !== undefined) setVoltagemBateria(d.voltagemBateria);
           if (d.impedanciaL !== undefined) setImpedanciaL(d.impedanciaL);
           if (d.impedanciaR !== undefined) setImpedanciaR(d.impedanciaR);
-          if (d.cyclingL !== undefined) setCyclingL(d.cyclingL);
-          if (d.cyclingR !== undefined) setCyclingR(d.cyclingR);
           if (d.marcadoresClinicosL) setMarcadoresClinicosL(d.marcadoresClinicosL);
           if (d.marcadoresClinicosR) setMarcadoresClinicosR(d.marcadoresClinicosR);
           if (d.tendenciasEstimulacao !== undefined) setTendenciasEstimulacao(d.tendenciasEstimulacao);
@@ -267,7 +261,7 @@ export default function App() {
     const timer = setTimeout(() => {
       setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'temp_sessions', activePatient.id), {
         tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
-        voltagemBateria, impedanciaL, impedanciaR, cyclingL, cyclingR,
+        voltagemBateria, impedanciaL, impedanciaR,
         marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao,
         enderecoSalvo, prescricoesSalvas, customDocs,
         editingSessionId: editingSessionId || null,
@@ -275,7 +269,7 @@ export default function App() {
       }).catch(() => {});
     }, 1500);
     return () => clearTimeout(timer);
-  }, [tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao, voltagemBateria, impedanciaL, impedanciaR, cyclingL, cyclingR, marcadoresClinicosL, marcadoresClinicosR, editingSessionId, user, activePatient, isInitializing, showLoginModal]);
+  }, [tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao, voltagemBateria, impedanciaL, impedanciaR, marcadoresClinicosL, marcadoresClinicosR, editingSessionId, user, activePatient, isInitializing, showLoginModal]);
 
   const historicoReal = useMemo(() => {
     const map = new Map();
@@ -346,7 +340,7 @@ export default function App() {
           timestamp: sessions.find(s => s.id === editingSessionId)?.timestamp || Date.now(),
           type: 'active',
           tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
-          voltagemBateria, impedanciaL, impedanciaR, cyclingL, cyclingR,
+          voltagemBateria, impedanciaL, impedanciaR,
           marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao
         };
         await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'sessions', editingSessionId), sessionData);
@@ -359,7 +353,7 @@ export default function App() {
     }, 1500);
     return () => { if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current); };
   }, [tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
-      voltagemBateria, impedanciaL, impedanciaR, cyclingL, cyclingR,
+      voltagemBateria, impedanciaL, impedanciaR,
       marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao, editingSessionId]);
 
   const gerarTextoProntuario = (grupos, eletrodo) => {
@@ -398,7 +392,7 @@ export default function App() {
   const copiarConsultaClipboard = () => {
     const hoje = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
     const programacaoTexto = gerarTextoProntuario(dadosGrupos, tipoEletrodo);
-    const cyclingStr = [cyclingL ? 'Esquerdo' : '', cyclingR ? 'Direito' : ''].filter(Boolean).join(', ') || 'Não';
+      // cycling is now per-program (see dadosGrupos[g][side][idx].cycling)
     const texto = [
       '=== SESSÃO DE PROGRAMAÇÃO ONLINE ===',
       `Data: ${hoje}`,
@@ -641,7 +635,17 @@ export default function App() {
             const ecLStr = get(cols, 'EfeitosColateraisE');
             const ecRStr = get(cols, 'EfeitosColateraisD');
             try {
-              await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'sessions'), {
+              // Apply per-program cycling from compact string
+          const cyclingStr = get('Cycling') || '';
+          if (cyclingStr) {
+            cyclingStr.split(';').filter(Boolean).forEach(entry => {
+              const [g, leadIdx] = entry.split('/');
+              const side = leadIdx?.startsWith('E') ? 'L' : 'R';
+              const idx = leadIdx?.length > 1 ? parseInt(leadIdx.slice(1)) - 1 : 0;
+              if (dadosGruposImp[g]?.[side]?.[idx]) dadosGruposImp[g][side][idx].cycling = true;
+            });
+          }
+          await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'sessions'), {
                 patientId: pacienteId,
                 timestamp: (() => {
                   const dataStr = get(cols, 'Data');
@@ -666,8 +670,6 @@ export default function App() {
                 voltagemBateria: get(cols, 'Bateria(V)'),
                 impedanciaL: get(cols, 'ImpedanciaE'),
                 impedanciaR: get(cols, 'ImpedanciaD'),
-                cyclingL: get(cols, 'CyclingE') === 'Sim',
-                cyclingR: get(cols, 'CyclingD') === 'Sim',
                 marcadoresClinicosL: [], marcadoresClinicosR: []
               });
               sessoesImportadas++;
@@ -724,7 +726,6 @@ export default function App() {
             (s.resumoSessao || '').replace(/[\n,]/g, ' '),
             s.tipoEletrodo || '', s.voltagemBateria || '',
             s.impedanciaL || '', s.impedanciaR || '',
-            s.cyclingL ? 'Sim' : 'Não', s.cyclingR ? 'Sim' : 'Não'
           ];
           gruposKeys.forEach(g => {
             [['L','E'],['R','D']].forEach(([l]) => {
@@ -785,38 +786,7 @@ export default function App() {
 
   // Helper: convert extractor's parsed dadosGrupos (contatos as string "–-0+")
   // to the app's format (contatos as object {0:{state:'-',perc:100},...})
-  const convertParsedGrupos = (parsed, tipoEl) => {
-    const tipo = tipoEl || '4-ring';
-    const result = {};
-    Object.entries(parsed || {}).forEach(([g, grupo]) => {
-      result[g] = {};
-      ['L', 'R'].forEach(lado => {
-        result[g][lado] = (grupo[lado] || []).map(prog => {
-          // Already converted (object format)?
-          if (prog.contatos && typeof prog.contatos === 'object' && !Array.isArray(prog.contatos)) {
-            return prog;
-          }
-          // Convert string "–-0+" to contact object
-          const contatosStr = prog.contatos || '';
-          const ordem = ORDEM_TEXTO_BAIXO_CIMA[tipo];
-          const novosContatos = getContatosIniciais(tipo);
-          // Strip spaces between symbols: "+0 - -" → "+0--"
-          const clean = contatosStr.replace(/([0+\-])\s+(?=[0+\-])/g, '$1');
-          const chars = [...clean]; // each char is a contact symbol
-          if (chars.length === ordem.length) {
-            chars.forEach((ch, i) => {
-              if (ch === '-' || ch === '+') {
-                novosContatos[ordem[i]] = { state: ch, perc: 100 };
-              }
-              // '0' stays as 'off'
-            });
-          }
-          return { ...prog, contatos: novosContatos };
-        });
-      });
-    });
-    return capPrograms(result);
-  };
+
 
   const handleSalvarSessao = async (modoAtualizar = false) => {
     if (!user || !activePatient) return;
@@ -826,7 +796,7 @@ export default function App() {
       timestamp: modoAtualizar && editingSessionId ? (sessions.find(s => s.id === editingSessionId)?.timestamp || Date.now()) : Date.now(),
       type: 'active',
       tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
-      voltagemBateria, impedanciaL, impedanciaR, cyclingL, cyclingR,
+      voltagemBateria, impedanciaL, impedanciaR,
       marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao
     };
 
@@ -895,7 +865,6 @@ export default function App() {
       clinica: { tremor:0, rigidez:0, bradicinesia:0 },
       efeitosColaterais: { L:[], R:[] }, notasLivres: '', resumoSessao: '',
       voltagemBateria: '', impedanciaL: '', impedanciaR: '',
-      cyclingL: false, cyclingR: false,
       marcadoresClinicosL: [], marcadoresClinicosR: [], tendenciasEstimulacao: ''
     };
     try {
@@ -944,8 +913,6 @@ export default function App() {
     setVoltagemBateria(sess.voltagemBateria || "");
     setImpedanciaL(sess.impedanciaL || "");
     setImpedanciaR(sess.impedanciaR || "");
-    setCyclingL(sess.cyclingL || false);
-    setCyclingR(sess.cyclingR || false);
     setMarcadoresClinicosL(sess.marcadoresClinicosL || []);
     setMarcadoresClinicosR(sess.marcadoresClinicosR || []);
     setEditingSessionId(sess.type === 'active' ? sess.id : null); 
@@ -966,8 +933,6 @@ export default function App() {
       setVoltagemBateria(ultimaAtiva.voltagemBateria || "");
       setImpedanciaL(ultimaAtiva.impedanciaL || "");
       setImpedanciaR(ultimaAtiva.impedanciaR || "");
-      setCyclingL(ultimaAtiva.cyclingL || false);
-      setCyclingR(ultimaAtiva.cyclingR || false);
       setMarcadoresClinicosL(ultimaAtiva.marcadoresClinicosL || []);
       setMarcadoresClinicosR(ultimaAtiva.marcadoresClinicosR || []);
       setEditingSessionId(null); 
@@ -1210,7 +1175,17 @@ ${progTexto}Avaliação: ${textoEfeito}
         tipoEl,
         s.voltagemBateria || '',
         s.impedanciaL || '', s.impedanciaR || '',
-        s.cyclingL ? 'Sim' : 'Não', s.cyclingR ? 'Sim' : 'Não',
+        (() => {
+          const entries = [];
+          Object.entries(s.dadosGrupos || {}).forEach(([g, grupo]) => {
+            ['L','R'].forEach(side => {
+              (grupo[side] || []).forEach((p, idx) => {
+                if (p.cycling) entries.push(`${g}/${side==='L'?'E':'D'}${(grupo[side].length>1)?idx+1:''}`);
+              });
+            });
+          });
+          return entries.join(';');
+        })(),
         s.clinica?.tremor ?? '', s.clinica?.rigidez ?? '', s.clinica?.bradicinesia ?? '',
       ];
       gruposKeys.forEach(g => {
@@ -1346,8 +1321,8 @@ ${progTexto}Avaliação: ${textoEfeito}
           voltagemBateria:        get('Bateria(V)'),
           impedanciaL:            get('ImpedanciaE'),
           impedanciaR:            get('ImpedanciaD'),
-          cyclingL:               get('CyclingE') === 'Sim',
-          cyclingR:               get('CyclingD') === 'Sim',
+          // cycling is now per-program; parse compact "A/E;B/D1" format
+          _cyclingStr: get('Cycling') || '',
           marcadoresClinicosL:    parseMarcStr(get('MarcadoresE')),
           marcadoresClinicosR:    parseMarcStr(get('MarcadoresD')),
         });
@@ -1961,7 +1936,7 @@ ${progTexto}Avaliação: ${textoEfeito}
                         configStr={configStr}
                         onAdicionarMarcador={(tipo) => adicionarMarcadorClinico('L', tipo, idx)}
                         onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('L', cfg)}
-                        cycling={cyclingL} onToggleCycling={() => setCyclingL(v => !v)}
+                        cycling={false} onToggleCycling={undefined}
                         impedancia={impedanciaL} onImpedanciaChange={setImpedanciaL}
                         onUpdateProg={atualizarPrograma} onUpdateState={atualizarContatoState} onUpdatePerc={atualizarContatoPerc}
                         ignorarPerc={!considerarAmplitude}
@@ -2031,7 +2006,7 @@ ${progTexto}Avaliação: ${textoEfeito}
                         configStr={configStr}
                         onAdicionarMarcador={(tipo) => adicionarMarcadorClinico('R', tipo, idx)}
                         onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('R', cfg)}
-                        cycling={cyclingR} onToggleCycling={() => setCyclingR(v => !v)}
+                        cycling={false} onToggleCycling={undefined}
                         impedancia={impedanciaR} onImpedanciaChange={setImpedanciaR}
                         onUpdateProg={atualizarPrograma} onUpdateState={atualizarContatoState} onUpdatePerc={atualizarContatoPerc}
                         ignorarPerc={!considerarAmplitude}
@@ -2296,7 +2271,6 @@ ${progTexto}Avaliação: ${textoEfeito}
           setVoltagemBateria(recente.voltagemBateria || '');
           setImpedanciaL(recente.impedanciaL || '');
           setImpedanciaR(recente.impedanciaR || '');
-          setCyclingL(!!recente.cyclingL); setCyclingR(!!recente.cyclingR);
           setMarcadoresClinicosL(recente.marcadoresClinicosL || []);
           setMarcadoresClinicosR(recente.marcadoresClinicosR || []);
           setConfirmNewSession(null);

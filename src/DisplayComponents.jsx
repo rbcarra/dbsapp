@@ -111,7 +111,7 @@ const PolarDisplay2D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, grupoKey
             const hType = classifyStim(hContatos, 'directional');
             const isRing = hType === 'ring' || !getDirLevel(h.config);
             const ampEf = calcAmpEfetiva(hContatos, h.amp || 0);
-            const cor = h.efeito === 'bom' ? '#10b981' : h.efeito === 'pouco' ? '#94a3b8' : h.efeito === 'nao_testado' ? 'transparent' : h.efeito === 'nao_testado' ? 'transparent' : '#67e8f9';
+            const cor = getEfeitoCor(h.efeito, 'hex');
             const opacity = Math.max(0.4, opacidadeMarcador(h.date || 0, sessaoAtualTimestamp || Date.now()));
             const rr = toR(ampEf);
             if (isRing) {
@@ -592,8 +592,7 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
           if (!isRing && !mostrarSingleDir) return null;
           const hVec = Object.keys(hContatos).length > 0 ? dirVector3D(hContatos, h.amp || 0) : null;
           if (!hVec || !isFinite(hVec.ux) || !isFinite(hVec.uz)) return null;
-          const cor = h.efeito === 'bom' ? '#10b981'
-            : h.efeito === 'pouco' ? '#94a3b8' : h.efeito === 'nao_testado' ? 'transparent' : h.efeito === 'col_marcha' ? '#f97316' : h.efeito === 'col_fala' ? '#a855f7' : h.efeito === 'col_outros' ? '#f43f5e' : '#67e8f9';
+          const cor = getEfeitoCor(h.efeito, 'hex');
           const opacity = Math.max(0.35, opacidadeMarcador(h.date || 0, sessaoAtualTimestamp || Date.now()));
           const hr = toR(hVec.amp || 0);
           const hOY = itemOriginY(h.config, showSchematic);
@@ -894,7 +893,7 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
                   const isMultiple = ampItems.length > 1;
 
                   return ampItems.map((h, i) => {
-                    const cor = h.efeito === 'bom' ? 'bg-emerald-400' : h.efeito === 'pouco' ? 'bg-slate-400' : h.efeito === 'nao_testado' ? 'bg-transparent border border-dashed border-slate-300' : h.efeito === 'col_marcha' ? 'bg-orange-400' : h.efeito === 'col_fala' ? 'bg-purple-400' : h.efeito === 'col_outros' ? 'bg-rose-500' : 'bg-cyan-300';
+                    const cor = getEfeitoCor(h.efeito, 'timeline');
                     const opacidade = opacidadeMarcador(h.date || 0, sessaoAtualTimestamp || Date.now());                    
                     if (isMultiple) {
                       const bottomPos = (ampItems.length - 1 - i) * 14 + 2;
