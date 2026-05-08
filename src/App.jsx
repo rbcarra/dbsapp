@@ -1658,7 +1658,7 @@ ${progTexto}Avaliação: ${textoEfeito}
             </button>
           </div>
         </BlocoColapsavel>
-          
+
         {/* BLOCO: PROGRAMAÇÃO ANTERIOR */}
         <BlocoColapsavel
           titulo="Programação Anterior"
@@ -1732,9 +1732,9 @@ ${progTexto}Avaliação: ${textoEfeito}
                               ['neutro',      'Bom / Mantido', 'bg-blue-500 hover:bg-blue-600 text-white'],
                               ['pouco',       'Pouco efeito',  'bg-slate-400 hover:bg-slate-500 text-white'],
                               ['nao_testado', 'Não testado',   'bg-transparent border border-dashed border-slate-400 text-slate-500 hover:bg-slate-50'],
-                              ['ruim',   'Col. - Marcha', 'bg-rose-400 hover:bg-rose-500 text-white'],
-                              ['ruim',   'Col. - Fala',   'bg-rose-600 hover:bg-rose-700 text-white'],
-                              ['ruim',   'Col. - Outro',  'bg-rose-800 hover:bg-rose-900 text-white'],
+                              ['col_marcha',  'Col. marcha',  'bg-orange-500 hover:bg-orange-600 text-white'],
+                              ['col_fala',    'Col. fala',    'bg-purple-500 hover:bg-purple-600 text-white'],
+                              ['col_outros',  'Col. outros',  'bg-rose-700 hover:bg-rose-800 text-white'],
                             ].map(([efVal, label, cls]) => (
                               <button key={label} onClick={() => handleEfeitoGrupo(grupo, efVal, label)}
                                 className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all shadow-sm ${cls}`}>
@@ -1868,6 +1868,9 @@ ${progTexto}Avaliação: ${textoEfeito}
                 tipoEletrodo={tipoEletrodo}
                 modoAmplitude={modoAmplitude}
                 sessaoAnteriorGrupos={sessaoReferencia?.dadosGrupos || null}
+                cyclingL={cyclingL}
+                cyclingR={cyclingR}
+                onCyclingChange={(side, val) => side === 'L' ? setCyclingL(val) : setCyclingR(val)}
               />
             </div>
           </details>

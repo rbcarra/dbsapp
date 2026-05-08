@@ -895,7 +895,7 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
                   const isMultiple = ampItems.length > 1;
 
                   return ampItems.map((h, i) => {
-                    const cor = h.efeito === 'bom' ? 'bg-emerald-400' : h.efeito === 'ruim' ? 'bg-rose-500' : h.efeito === 'pouco' ? 'bg-slate-400' : h.efeito === 'nao_testado' ? 'bg-transparent border border-dashed border-slate-300' : 'bg-cyan-300';
+                    const cor = h.efeito === 'bom' ? 'bg-emerald-400' : h.efeito === 'pouco' ? 'bg-slate-400' : h.efeito === 'nao_testado' ? 'bg-transparent border border-dashed border-slate-300' : h.efeito === 'col_marcha' ? 'bg-orange-400' : h.efeito === 'col_fala' ? 'bg-purple-400' : h.efeito === 'col_outros' ? 'bg-rose-500' : 'bg-cyan-300';
                     const opacidade = opacidadeMarcador(h.date || 0, sessaoAtualTimestamp || Date.now());                    
                     if (isMultiple) {
                       const bottomPos = (ampItems.length - 1 - i) * 14 + 2;

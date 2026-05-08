@@ -1450,8 +1450,8 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
       {/* ══ EXTRACT ═════════════════════════════════════════════════════════ */}
       {phase==='extract' && (
         <div className="flex-1 flex gap-0 min-h-0 overflow-hidden">
-          {/* Left: text — reduced to make room for 4-group editor */}
-          <div className="flex flex-col min-h-0 border-r border-slate-800" style={{width:'28%',minWidth:'16rem'}}>
+          {/* Left: text */}
+          <div className="flex flex-col min-h-0 border-r border-slate-800" style={{width:'50%',minWidth:'20rem'}}>
             <div className="bg-slate-900 border-b border-slate-800 px-4 py-2 flex items-center justify-between shrink-0">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
                 Consulta {consultIdx+1} / {consultations.length}
