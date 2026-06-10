@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { signInWithCustomToken, onAuthStateChanged, signOut } from 'firebase/auth';
 import { collection, doc, setDoc, getDoc, onSnapshot, addDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 
-import { ORDEM_TEXTO_BAIXO_CIMA, MARCADOR_LETRAS, EFEITO_OPTS, getEfeitoCor,
+import { TIPOS_ELETRODO, ORDEM_TEXTO_BAIXO_CIMA, MARCADOR_LETRAS, EFEITO_OPTS, getEfeitoCor,
   opacidadeMarcador, getContatosIniciais, getStringConfig, formatarData,
   convertParsedGrupos, criarProgramaVazio } from './constants';
 import { getDirLevel, dirUnitVector2D, calcAmpEfetiva, classifyStim } from './vectorHelpers';
@@ -69,6 +69,20 @@ export default function App() {
   const [marcadoresClinicosL, setMarcadoresClinicosL] = useState([]);
   const [marcadoresClinicosR, setMarcadoresClinicosR] = useState([]);
 
+  // ── Racionais de grupo (salvos por sessão) ────────────────────────────────
+  const [racionaisGrupos, setRacionaisGrupos] = useState({ A: '', B: '', C: '', D: '' });
+  const racionaisRef = useRef({ A: '', B: '', C: '', D: '' });
+  useEffect(() => { racionaisRef.current = racionaisGrupos; }, [racionaisGrupos]);
+
+  // ── Campo "Programação em Texto" ──────────────────────────────────────────
+  const [textoProgramacaoAtual, setTextoProgramacaoAtual] = useState('');
+  const [erroTextoProgramacao, setErroTextoProgramacao] = useState(false);
+  const parseDebounceRef = useRef(null);
+  const skipTextSyncRef = useRef(false);
+
+  // ── Histórico de Contatos (painel B) ─────────────────────────────────────
+  const [historicoContatosAberto, setHistoricoContatosAberto] = useState(false);
+
   // Banco de Dados States
   const [allSessions, setAllSessions] = useState([]);
   const [editingSessionId, setEditingSessionId] = useState(null);
@@ -116,6 +130,7 @@ export default function App() {
   const [blocosAbertos, setBlocosAbertos] = useState({
     progAnterior: true,
     progAtual: true,
+    textoProg: true,
     prontuario: true,
     reconstrucao: true,
     importExport: false,
@@ -208,6 +223,7 @@ export default function App() {
       setCyclingR(false);
       setMarcadoresClinicosL([]);
       setMarcadoresClinicosR([]);
+      setRacionaisGrupos({ A: '', B: '', C: '', D: '' });
       setEditingSessionId(null);
 
       try {
@@ -229,6 +245,7 @@ export default function App() {
           if (d.impedanciaR !== undefined) setImpedanciaR(d.impedanciaR);
           if (d.marcadoresClinicosL) setMarcadoresClinicosL(d.marcadoresClinicosL);
           if (d.marcadoresClinicosR) setMarcadoresClinicosR(d.marcadoresClinicosR);
+          if (d.racionaisGrupos) setRacionaisGrupos(d.racionaisGrupos);
           if (d.tendenciasEstimulacao !== undefined) setTendenciasEstimulacao(d.tendenciasEstimulacao);
           if (d.dispositivoInfo) setDispositivoInfo(d.dispositivoInfo);
           if (d.enderecoSalvo !== undefined) setEnderecoSalvo(d.enderecoSalvo);
@@ -264,6 +281,7 @@ export default function App() {
         tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
         voltagemBateria, impedanciaL, impedanciaR,
         marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao,
+        racionaisGrupos,
         enderecoSalvo, prescricoesSalvas, customDocs,
         editingSessionId: editingSessionId || null,
         timestamp: Date.now()
@@ -342,7 +360,7 @@ export default function App() {
           type: 'active',
           tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
           voltagemBateria, impedanciaL, impedanciaR,
-          marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao
+          marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao, racionaisGrupos,
         };
         await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'sessions', editingSessionId), sessionData);
         setAutoSaveStatus('saved');
@@ -385,6 +403,133 @@ export default function App() {
     });
     return text.trim();
   };
+
+  // ── Gerador de texto COM racional ─────────────────────────────────────────
+  const gerarTextoAtual = (grupos, eletrodo, racionais = {}) => {
+    let text = '';
+    const ordem = ORDEM_TEXTO_BAIXO_CIMA[eletrodo];
+    ['A', 'B', 'C', 'D'].forEach(g => {
+      const racional = racionais?.[g] || '';
+      text += `Grupo ${g}: Racional do grupo: ${racional}\n`;
+      ['L', 'R'].forEach(lado => {
+        const progs = (grupos[g] || {})[lado] || [];
+        progs.forEach((prog, idx) => {
+          const leadStr = lado === 'L' ? 'E' : 'D';
+          const leadName = progs.length > 1 ? `Lead ${leadStr}${idx + 1}` : `Lead ${leadStr}`;
+          const contactStr = ordem.map(c => {
+            const st = prog.contatos?.[c]?.state || 'off';
+            if (st === 'off') return '0';
+            const perc = prog.contatos[c].perc;
+            return perc < 100 ? `${st}(${perc}%)` : st;
+          }).join('');
+          if ((prog.amp || 0) > 0) {
+            text += `${leadName} ${contactStr} ${prog.amp.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz\n`;
+          }
+        });
+      });
+      text += '\n';
+    });
+    return text.trimEnd();
+  };
+
+  // ── Parser de texto atual → dadosGrupos + racionais ──────────────────────
+  const parsearTextoAtual = (text, eletrodo) => {
+    const linhas = text.split('\n');
+    const ordem = ORDEM_TEXTO_BAIXO_CIMA[eletrodo || tipoEletrodo] || ORDEM_TEXTO_BAIXO_CIMA['4-ring'];
+    let currentGroup = null;
+    const novosGrupos = {
+      A: { L: [], R: [] }, B: { L: [], R: [] },
+      C: { L: [], R: [] }, D: { L: [], R: [] }
+    };
+    const racionais = { A: '', B: '', C: '', D: '' };
+    let foundAnyGroup = false;
+    let foundAnyLead = false;
+
+    for (let linha of linhas) {
+      linha = linha.trim();
+      if (!linha) continue;
+
+      // Match "Grupo X: ..." com ou sem racional
+      const matchGrupo = linha.match(/^Grupo\s+([A-D])\b/i);
+      if (matchGrupo) {
+        currentGroup = matchGrupo[1].toUpperCase();
+        foundAnyGroup = true;
+        const matchRacional = linha.match(/Racional do grupo:\s*(.*)/i);
+        if (matchRacional) racionais[currentGroup] = matchRacional[1].trim();
+        continue;
+      }
+
+      if (currentGroup) {
+        const matchLead = linha.match(/Lead\s+(E|D)(\d+)?\s+(\S+)\s+([\d\.,]+)\s*(V|mA)\s+(\d+)\s*(µs|us)\s+(\d+)\s*Hz/i);
+        if (matchLead) {
+          const lado = matchLead[1].toUpperCase() === 'E' ? 'L' : 'R';
+          const contatosStr = matchLead[3];
+          const amp = parseFloat(matchLead[4].replace(',', '.'));
+          const pw = parseInt(matchLead[6]);
+          const freq = parseInt(matchLead[8]);
+          const novosContatos = getContatosIniciais(eletrodo || tipoEletrodo);
+          const tokens = [...contatosStr.matchAll(/(0|\+|-)(?:\((\d+)%\))?/g)];
+          if (tokens.length === ordem.length) {
+            tokens.forEach((t, ti) => {
+              if (t[1] === '-' || t[1] === '+') {
+                novosContatos[ordem[ti]].state = t[1];
+                novosContatos[ordem[ti]].perc = t[2] ? parseInt(t[2]) : 100;
+              }
+            });
+          }
+          if (novosGrupos[currentGroup][lado].length < 2) {
+            novosGrupos[currentGroup][lado].push({
+              contatos: novosContatos, amp, pw, freq, efeito: 'neutro', cycling: false
+            });
+            foundAnyLead = true;
+          }
+        }
+      }
+    }
+
+    if (!foundAnyGroup) return { ok: false };
+
+    // Preencher grupos vazios com programa inicial
+    ['A','B','C','D'].forEach(g => {
+      if (novosGrupos[g].L.length === 0) novosGrupos[g].L.push(criarProgramaVazio(eletrodo || tipoEletrodo));
+      if (novosGrupos[g].R.length === 0) novosGrupos[g].R.push(criarProgramaVazio(eletrodo || tipoEletrodo));
+    });
+
+    return { ok: true, grupos: novosGrupos, racionais };
+  };
+
+  // ── Handler de edição do texto (debounced) ────────────────────────────────
+  const handleTextoAtualChange = (newText) => {
+    setTextoProgramacaoAtual(newText);
+    if (parseDebounceRef.current) clearTimeout(parseDebounceRef.current);
+    parseDebounceRef.current = setTimeout(() => {
+      const result = parsearTextoAtual(newText);
+      if (result.ok) {
+        setErroTextoProgramacao(false);
+        skipTextSyncRef.current = true;
+        setDadosGrupos(result.grupos);
+        setRacionaisGrupos(result.racionais);
+      } else {
+        setErroTextoProgramacao(true);
+      }
+    }, 500);
+  };
+
+  // ── Sincronizar texto quando dadosGrupos muda pela UI ────────────────────
+  useEffect(() => {
+    if (skipTextSyncRef.current) {
+      skipTextSyncRef.current = false;
+      return;
+    }
+    setTextoProgramacaoAtual(gerarTextoAtual(dadosGrupos, tipoEletrodo, racionaisRef.current));
+    setErroTextoProgramacao(false);
+  }, [dadosGrupos, tipoEletrodo]);
+
+  // Sincronizar também quando racionais mudam externamente (ex: load sessão)
+  useEffect(() => {
+    if (skipTextSyncRef.current) return;
+    setTextoProgramacaoAtual(gerarTextoAtual(dadosGrupos, tipoEletrodo, racionaisGrupos));
+  }, [racionaisGrupos]);
 
   useEffect(() => {
     setTextoProntuario(gerarTextoProntuario(dadosGrupos, tipoEletrodo));
@@ -803,7 +948,7 @@ export default function App() {
       type: 'active',
       tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
       voltagemBateria, impedanciaL, impedanciaR,
-      marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao
+      marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao, racionaisGrupos,
     };
 
     try {
@@ -881,6 +1026,7 @@ export default function App() {
       setNotasLivres(''); setResumoSessao(''); setVoltagemBateria('');
       setImpedanciaL(''); setImpedanciaR(''); setCyclingL(false); setCyclingR(false);
       setMarcadoresClinicosL([]); setMarcadoresClinicosR([]); setTendenciasEstimulacao('');
+      setRacionaisGrupos({ A: '', B: '', C: '', D: '' });
       setEditingSessionId(docRef.id);
       showToast("Sessão vazia criada!");
     } catch(err) { console.error(err); showToast("Erro ao criar sessão vazia."); }
@@ -921,6 +1067,7 @@ export default function App() {
     setImpedanciaR(sess.impedanciaR || "");
     setMarcadoresClinicosL(sess.marcadoresClinicosL || []);
     setMarcadoresClinicosR(sess.marcadoresClinicosR || []);
+    setRacionaisGrupos(sess.racionaisGrupos || { A: '', B: '', C: '', D: '' });
     setEditingSessionId(sess.type === 'active' ? sess.id : null); 
     setIsPanelOpen(false);
     showToast(sess.type === 'active' ? "Sessão carregada para edição" : "Visualizando sessão antiga");
@@ -941,6 +1088,7 @@ export default function App() {
       setImpedanciaR(ultimaAtiva.impedanciaR || "");
       setMarcadoresClinicosL(ultimaAtiva.marcadoresClinicosL || []);
       setMarcadoresClinicosR(ultimaAtiva.marcadoresClinicosR || []);
+      setRacionaisGrupos(ultimaAtiva.racionaisGrupos || { A: '', B: '', C: '', D: '' });
       setEditingSessionId(null); 
       showToast("Última sessão copiada com sucesso!");
     } else {
@@ -1157,6 +1305,7 @@ ${progTexto}Avaliação: ${textoEfeito}
       })),
       'EfeitosColateraisE', 'EfeitosColateraisD',
       'MarcadoresE', 'MarcadoresD',
+      'RacionalA', 'RacionalB', 'RacionalC', 'RacionalD',
       'NotasLivres'
     ];
 
@@ -1211,7 +1360,10 @@ ${progTexto}Avaliação: ${textoEfeito}
       const mToStr = (m) => `${m.config}|${m.tipo}|${m.amp}|${m.pw || ''}|${m.freq || ''}`;
       const marcE = (s.marcadoresClinicosL || []).map(mToStr).join(';');
       const marcD = (s.marcadoresClinicosR || []).map(mToStr).join(';');
-      row.push(ecL, ecR, marcE, marcD, (s.notasLivres || '').replace(/[\n,]/g, ' '));
+      const racs = s.racionaisGrupos || {};
+      row.push(ecL, ecR, marcE, marcD,
+        racs.A || '', racs.B || '', racs.C || '', racs.D || '',
+        (s.notasLivres || '').replace(/[\n,]/g, ' '));
       return row;
     });
 
@@ -1332,6 +1484,12 @@ ${progTexto}Avaliação: ${textoEfeito}
 
           marcadoresClinicosL:    parseMarcStr(get('MarcadoresE')),
           marcadoresClinicosR:    parseMarcStr(get('MarcadoresD')),
+          racionaisGrupos: {
+            A: get('RacionalA') || '',
+            B: get('RacionalB') || '',
+            C: get('RacionalC') || '',
+            D: get('RacionalD') || '',
+          },
         });
         importadas++;
       } catch(e) { console.error(e); }
@@ -1706,6 +1864,11 @@ ${progTexto}Avaliação: ${textoEfeito}
                       <div className="shrink-0">
                         <span className="text-xs font-black text-slate-700 block mb-1.5">
                           Grupo {grupo}{notaLado && <span className="font-normal text-indigo-500 text-[9px] ml-1">{notaLado}</span>}
+                          {sessaoReferencia?.racionaisGrupos?.[grupo] && (
+                            <span className="font-normal text-amber-600 text-[9px] ml-2 italic">
+                              Racional: {sessaoReferencia.racionaisGrupos[grupo]}
+                            </span>
+                          )}
                         </span>
                         {mostrarBotoes && (
                           <div className="flex flex-wrap gap-1">
@@ -1729,6 +1892,64 @@ ${progTexto}Avaliação: ${textoEfeito}
               </div>
             );
           })()}
+        </BlocoColapsavel>
+
+        {/* ── BLOCO: PROGRAMAÇÃO ATUAL (EM TEXTO) ── */}
+        <BlocoColapsavel
+          titulo="Programação Atual (em texto)"
+          aberto={blocosAbertos.textoProg ?? true}
+          onToggle={() => toggleBloco('textoProg')}
+          corHeader="bg-violet-50"
+        >
+          <div className="flex flex-col gap-2">
+            {/* Alerta de erro de parsing */}
+            {erroTextoProgramacao && (
+              <div className="flex items-center gap-2 px-3 py-2 bg-rose-50 border border-rose-300 rounded-lg text-xs font-bold text-rose-700 animate-pulse">
+                ⚠ Programação não reconhecida — verifique o formato. O sistema necessita ao menos "Grupo A/B/C/D" no texto.
+              </div>
+            )}
+
+            {/* Textarea principal */}
+            <div className="relative">
+              <textarea
+                value={textoProgramacaoAtual}
+                onChange={e => handleTextoAtualChange(e.target.value)}
+                spellCheck={false}
+                rows={16}
+                className={`w-full p-3 text-sm font-mono border rounded-lg focus:outline-none focus:ring-2 resize-y text-slate-700 leading-relaxed bg-white whitespace-pre ${
+                  erroTextoProgramacao
+                    ? 'border-rose-400 focus:ring-rose-300'
+                    : 'border-slate-200 focus:ring-violet-300'
+                }`}
+                placeholder={
+                  'Grupo A: Racional do grupo: \nLead E 0-00 1.5 mA 60 µs 130 Hz\nLead D 0-00 1.5 mA 60 µs 130 Hz\n\nGrupo B: Racional do grupo: \n...'
+                }
+              />
+              <div className="absolute bottom-2 right-2 flex gap-1.5">
+                {/* Botão regenerar (força re-sync da interface) */}
+                <button
+                  onClick={() => {
+                    skipTextSyncRef.current = false;
+                    setTextoProgramacaoAtual(gerarTextoAtual(dadosGrupos, tipoEletrodo, racionaisGrupos));
+                    setErroTextoProgramacao(false);
+                  }}
+                  className="text-[9px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-500 px-2 py-1 rounded border border-slate-200"
+                  title="Regenerar texto a partir da interface visual"
+                >
+                  ↺ Regenerar
+                </button>
+              </div>
+            </div>
+
+            {/* Legenda do formato */}
+            <p className="text-[9px] text-slate-400 leading-relaxed">
+              <span className="font-bold text-slate-500">Formato por linha:</span>{' '}
+              <code className="bg-slate-100 px-1 rounded">Grupo A: Racional do grupo: [texto livre]</code>
+              {' '}→{' '}
+              <code className="bg-slate-100 px-1 rounded">Lead E/D [contatos] [amp] mA [pw] µs [freq] Hz</code>
+              {' '}· Contatos: 0 = off, – = cátodo, + = ânodo · Edição bidirecional com a interface abaixo
+            </p>
+          </div>
         </BlocoColapsavel>
 
         {/* BLOCO: PROGRAMAÇÃO ATUAL */}
@@ -2019,6 +2240,184 @@ ${progTexto}Avaliação: ${textoEfeito}
         </BlocoColapsavel>
 
 
+        {/* ── BLOCO: HISTÓRICO COMPLETO DE CONTATOS ── */}
+        <BlocoColapsavel
+          titulo="Histórico Completo de Contatos"
+          aberto={historicoContatosAberto}
+          onToggle={() => setHistoricoContatosAberto(v => !v)}
+          corHeader="bg-slate-100"
+        >
+          {historicoContatosAberto && (() => {
+            // Computar todos os contatos únicos de todas as sessões
+            const todosContatos = { L: new Map(), R: new Map() };
+            sessions.filter(s => s.type === 'active').forEach(sess => {
+              Object.entries(sess.dadosGrupos || {}).forEach(([g, grupo]) => {
+                ['L', 'R'].forEach(lado => {
+                  (grupo[lado] || []).forEach(prog => {
+                    const cfg = getStringConfig(prog.contatos, !considerarAmplitude);
+                    if (!cfg) return;
+                    if (!todosContatos[lado].has(cfg)) {
+                      todosContatos[lado].set(cfg, {
+                        cfg, contatos: prog.contatos,
+                        entradas: []
+                      });
+                    }
+                    todosContatos[lado].get(cfg).entradas.push({
+                      amp: prog.amp, pw: prog.pw, freq: prog.freq,
+                      efeito: prog.efeito || 'neutro', date: sess.timestamp,
+                      sessionId: sess.id, grupo: g,
+                    });
+                  });
+                });
+              });
+            });
+
+            // Também incluir marcadores históricos para enrichment
+            const enriquecerComMarcadores = (lado, cfg) => {
+              const todos = [...marcadoresHistoricos[lado], ...( lado === 'L' ? marcadoresClinicosL : marcadoresClinicosR )];
+              return todos.filter(m => {
+                const mCfg = getStringConfig(
+                  Object.fromEntries(Object.entries(m).filter(() => false)) || {},
+                  !considerarAmplitude
+                ) || m.config;
+                return mCfg === cfg;
+              });
+            };
+
+            // Helper: render contatos como mini-display compacto
+            const MiniContatos = ({ contatos, tipoEl }) => {
+              const layout = TIPOS_ELETRODO[tipoEl] || TIPOS_ELETRODO['4-ring'];
+              const cores = {
+                'off': 'bg-slate-100 text-slate-400 border-slate-200',
+                '-': 'bg-cyan-500 text-white border-cyan-600',
+                '+': 'bg-rose-500 text-white border-rose-600',
+              };
+              return (
+                <div className="flex flex-col items-center gap-0.5 shrink-0">
+                  {layout.map((linha, ri) => (
+                    <div key={ri} className="flex gap-0.5 justify-center">
+                      {linha.map(chave => {
+                        const c = contatos?.[chave] || { state: 'off', perc: 100 };
+                        return (
+                          <div key={chave}
+                            className={`w-7 h-5 rounded border text-[8px] font-bold flex items-center justify-center ${cores[c.state]}`}
+                            title={`${chave}: ${c.state}${c.state !== 'off' && c.perc < 100 ? ` ${c.perc}%` : ''}`}
+                          >
+                            {chave.length <= 2 ? chave : chave.slice(-1)}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              );
+            };
+
+            // Mini-timeline por config
+            const MiniTimeline = ({ entradas }) => {
+              if (!entradas || entradas.length === 0) {
+                return <span className="text-[9px] text-slate-400 italic">sem registros</span>;
+              }
+              const maxAmp = Math.max(...entradas.map(e => e.amp || 0), 4);
+              const ordenadas = [...entradas].sort((a, b) => a.date - b.date);
+              return (
+                <div className="flex flex-col gap-0.5 w-full">
+                  {/* Eixo */}
+                  <div className="relative h-3 w-full ml-1">
+                    {[0, 0.25, 0.5, 0.75, 1].map(f => (
+                      <span key={f} className="absolute text-[7px] text-slate-400 -translate-x-1/2"
+                        style={{ left: `${f * 100}%` }}>
+                        {(maxAmp * f).toFixed(1)}
+                      </span>
+                    ))}
+                    <span className="absolute right-0 text-[7px] text-slate-400">mA</span>
+                  </div>
+                  {/* Linha única com pontos */}
+                  <div className="relative h-7 w-full bg-slate-50 border border-slate-200 rounded">
+                    {ordenadas.map((e, ei) => {
+                      const leftPct = Math.min(98, ((e.amp || 0) / maxAmp) * 100);
+                      const efOpt = EFEITO_OPTS.find(o => o.val === (e.efeito || 'neutro'));
+                      const hex = efOpt?.hex || '#94a3b8';
+                      return (
+                        <div key={ei}
+                          className="absolute w-4 h-4 rounded-full border-2 flex items-center justify-center"
+                          style={{
+                            left: `calc(${leftPct}% - 8px)`,
+                            top: '50%', transform: 'translateY(-50%)',
+                            backgroundColor: hex + '33',
+                            borderColor: hex,
+                          }}
+                          title={`${new Date(e.date).toLocaleDateString('pt-BR')} — Grupo ${e.grupo} — ${e.amp}mA ${e.pw}µs ${e.freq}Hz — ${e.efeito}`}
+                        >
+                          <span className="text-[7px] font-bold" style={{ color: hex }}>{e.grupo}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="flex flex-wrap gap-1 mt-0.5">
+                    {ordenadas.map((e, ei) => (
+                      <span key={ei} className="text-[7px] text-slate-400 bg-slate-100 px-1 rounded">
+                        {new Date(e.date).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+                        {' '}{e.amp}mA {e.pw}µs {e.freq}Hz
+                        {' '}G{e.grupo}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            };
+
+            const renderLado = (lado) => {
+              const map = todosContatos[lado];
+              if (map.size === 0) return <p className="text-[10px] text-slate-400 italic">Nenhum contato registrado.</p>;
+              return (
+                <div className="flex flex-col gap-2">
+                  {[...map.values()].sort((a, b) => b.entradas.length - a.entradas.length).map(({ cfg, contatos, entradas }) => (
+                    <div key={cfg} className="flex items-start gap-3 p-2 bg-slate-900 rounded-lg border border-slate-700">
+                      {/* Mini display de contatos */}
+                      <div className="shrink-0 flex flex-col items-center gap-1">
+                        <MiniContatos contatos={contatos} tipoEl={tipoEletrodo} />
+                        <span className="text-[7px] font-mono text-slate-500 bg-slate-800 px-1 rounded">{cfg}</span>
+                      </div>
+                      {/* Timeline */}
+                      <div className="flex-1 min-w-0">
+                        <MiniTimeline entradas={entradas} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            };
+
+            return (
+              <div className="flex flex-col gap-4 bg-slate-950 rounded-xl p-3 -mx-1">
+                <p className="text-[10px] text-slate-400">
+                  Todas as configurações de contatos já utilizadas neste paciente, com histórico de amplitude e efeito.
+                  {' '}<span className="text-slate-500">({sessions.filter(s=>s.type==='active').length} sessões indexadas)</span>
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <h3 className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2">
+                      ◈ Hemisfério Esquerdo ({todosContatos.L.size} configurações)
+                    </h3>
+                    {renderLado('L')}
+                  </div>
+                  <div>
+                    <h3 className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2">
+                      ◈ Hemisfério Direito ({todosContatos.R.size} configurações)
+                    </h3>
+                    {renderLado('R')}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+          {!historicoContatosAberto && (
+            <p className="text-[10px] text-slate-400 italic">Expandir para carregar histórico...</p>
+          )}
+        </BlocoColapsavel>
+
+
         {/* BLOCO: RECONSTRUÇÃO */}
         <BlocoColapsavel
           titulo="Reconstrução do Eletrodo"
@@ -2052,43 +2451,48 @@ ${progTexto}Avaliação: ${textoEfeito}
 
         {/* BLOCO: IMPORTAÇÃO / EXPORTAÇÃO */}
         <BlocoColapsavel
-          titulo="Importação / Exportação"
+          titulo="Importação / Exportação CSV"
           aberto={blocosAbertos.importExport}
           onToggle={() => toggleBloco('importExport')}
         >
-          <div className="flex flex-col gap-4">
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <div>
-                  <p className="text-xs font-bold text-slate-700">Histórico CSV</p>
-                  <p className="text-[10px] text-slate-500">Todas as sessões ativas. Uma linha por sessão.</p>
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={exportarHistoricoCSV} className="text-xs bg-emerald-600 text-white hover:bg-emerald-700 px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm">⬇ Exportar CSV</button>
-                  <label className="text-xs bg-indigo-600 text-white hover:bg-indigo-700 px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm cursor-pointer">
-                    ⬆ Importar CSV
-                    <input type="file" accept=".csv" className="hidden" onChange={e => e.target.files?.[0] && importarHistoricoCSV(e.target.files[0])} />
-                  </label>
-                </div>
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-slate-700">Histórico CSV</p>
+                <p className="text-[10px] text-slate-500">Todas as sessões ativas deste paciente. Uma linha por sessão.</p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={exportarHistoricoCSV} className="text-xs bg-emerald-600 text-white hover:bg-emerald-700 px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm">⬇ Exportar CSV</button>
+                <label className="text-xs bg-indigo-600 text-white hover:bg-indigo-700 px-3 py-1.5 rounded-lg font-bold transition-all shadow-sm cursor-pointer">
+                  ⬆ Importar CSV
+                  <input type="file" accept=".csv" className="hidden" onChange={e => e.target.files?.[0] && importarHistoricoCSV(e.target.files[0])} />
+                </label>
               </div>
             </div>
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <div>
-                  <p className="text-xs font-bold text-slate-700">Integração com Prontuário</p>
-                  <p className="text-[10px] text-slate-500">Cole um texto no formato DBS para importar a programação.</p>
+            {/* Legacy: importar via texto de prontuário */}
+            <details className="group">
+              <summary className="cursor-pointer text-[10px] font-bold text-slate-400 hover:text-slate-600 flex items-center gap-1 select-none">
+                <span className="group-open:rotate-90 transition-transform inline-block">▶</span>
+                Importar via texto de prontuário (formato legado)
+              </summary>
+              <div className="mt-2 flex flex-col gap-2">
+                <p className="text-[10px] text-slate-500">
+                  Cole um texto de consulta para importar programação. Ou use o campo "Programação Atual (em texto)" acima para edição em tempo real.
+                </p>
+                <div className="flex justify-end">
+                  <button onClick={aplicarProntuario} className="text-xs bg-indigo-600 text-white hover:bg-indigo-700 px-4 py-2 rounded-lg font-bold transition-all shadow-sm">
+                    Ler Texto e Aplicar
+                  </button>
                 </div>
-                <button onClick={aplicarProntuario} className="text-xs bg-indigo-600 text-white hover:bg-indigo-700 px-4 py-2 rounded-lg font-bold transition-all shadow-sm">
-                  Ler Texto e Aplicar
-                </button>
+                <textarea
+                  value={textoProntuario}
+                  onChange={(e) => setTextoProntuario(e.target.value)}
+                  className="w-full h-36 p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono resize-y text-slate-700 whitespace-pre"
+                  spellCheck="false"
+                  placeholder="Cole aqui o texto do prontuário no formato DBS para importar..."
+                />
               </div>
-              <textarea
-                value={textoProntuario}
-                onChange={(e) => setTextoProntuario(e.target.value)}
-                className="w-full h-48 p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono resize-y text-slate-700 whitespace-pre"
-                spellCheck="false"
-              />
-            </div>
+            </details>
           </div>
         </BlocoColapsavel>
 
