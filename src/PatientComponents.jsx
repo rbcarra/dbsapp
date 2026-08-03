@@ -2,15 +2,17 @@ import React, { useState } from 'react';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { auth } from './firebase';
 
-const BlocoColapsavel = ({ titulo, aberto, onToggle, children, corHeader = 'bg-slate-50' }) => (
+const BlocoColapsavel = ({ titulo, aberto, onToggle, children, corHeader = 'bg-slate-50', headerExtra = null }) => (
   <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-    <button
-      onClick={onToggle}
-      className={`w-full flex items-center justify-between px-4 py-2.5 ${corHeader} border-b border-slate-200 hover:bg-slate-100 transition-colors`}
-    >
-      <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">{titulo}</span>
-      <span className="text-slate-400 text-sm">{aberto ? '▲' : '▼'}</span>
-    </button>
+    <div className={`w-full flex items-center justify-between px-4 py-2.5 ${corHeader} border-b border-slate-200`}>
+      <button onClick={onToggle} className="flex items-center gap-2 flex-1 hover:opacity-70 transition-opacity">
+        <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">{titulo}</span>
+      </button>
+      <div className="flex items-center gap-2">
+        {headerExtra}
+        <button onClick={onToggle} className="text-slate-400 text-sm hover:text-slate-600">{aberto ? '▲' : '▼'}</button>
+      </div>
+    </div>
     {aberto && <div className="p-4">{children}</div>}
   </div>
 );
