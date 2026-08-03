@@ -64,7 +64,7 @@ export default function App() {
 
   // ── AI health-check: single shared poll every 30s ──────────────────────────
   useEffect(() => {
-    if (!aiConfig.enabled || (!aiConfig.ollamaUrl && !aiConfig.transcribeUrl)) {
+    if (!aiConfig.enabled || !aiConfig.serverUrl) {
       setAiHealth({ ollama: false, transcribe: false });
       return;
     }
@@ -87,7 +87,7 @@ export default function App() {
 
   // ── Transcribe recorded audio ──────────────────────────────────────────────
   const handleAudioRecorded = async (blob) => {
-    if (!aiConfig.transcribeUrl) { showToast('Configure a URL de transcrição primeiro.'); return; }
+    if (!aiConfig.serverUrl) { showToast('Configure a URL do servidor primeiro.'); return; }
     setAiBusy(true);
     showToast('Transcrevendo áudio…');
     try {
@@ -104,7 +104,7 @@ export default function App() {
   // ── Organize raw transcription with LLM ────────────────────────────────────
   const handleOrganizeTranscription = async () => {
     if (!transcricaoBruta.trim()) { showToast('Nada para organizar.'); return; }
-    if (!aiConfig.ollamaUrl) { showToast('Configure a URL do Ollama primeiro.'); return; }
+    if (!aiConfig.serverUrl) { showToast('Configure a URL do servidor primeiro.'); return; }
     setAiBusy(true);
     showToast('Organizando com IA…');
     try {
@@ -1655,6 +1655,9 @@ ${progTexto}Avaliação: ${textoEfeito}
               onAddCustom={(doc) => setCustomDocs(prev => [...prev, doc])}
               onDeleteCustom={(id) => setCustomDocs(prev => prev.filter(d => d.id !== id))}
               onUpdateCustom={(id, text) => setCustomDocs(prev => prev.map(d => d.id===id ? {...d, texto:text} : d))}
+              aiEnabled={aiConfig.enabled}
+              aiHealthOllama={aiHealth.ollama}
+              transcricaoOrganizada={transcricaoOrganizada}
             />
           </div>
         )}

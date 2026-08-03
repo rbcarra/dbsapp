@@ -888,6 +888,34 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
   const [lastCapture,setLastCapture]= useState('');
   const [flash,      setFlash]      = useState(false);
   const [visionLoading, setVisionLoading] = useState(false);
+  const [aiExtracting, setAiExtracting] = useState(false);
+  const [aiExtractResult, setAiExtractResult] = useState(null);
+  const [aiAvailable, setAiAvailable] = useState(false);
+
+  // Check AI availability once when modal opens
+  useEffect(() => {
+    const cfg = getAIConfig();
+    if (cfg.enabled && cfg.serverUrl) {
+      checkHealth(cfg).then(h => setAiAvailable(h.ollama));
+    }
+  }, []);
+
+  const handleAIExtract = async () => {
+    if (!rawText.trim()) return;
+    setAiExtracting(true);
+    setAiExtractResult(null);
+    try {
+      const result = await extrairProntuario({ prontuario: rawText, config: getAIConfig() });
+      setAiExtractResult(result);
+      // If structured data with patient name, auto-fill
+      if (result.dados?.paciente?.nome && !nome) setNome(result.dados.paciente.nome);
+      if (result.dados?.paciente?.hc && !hc) setHc(result.dados.paciente.hc);
+    } catch (e) {
+      setAiExtractResult({ erro: e.message });
+    } finally {
+      setAiExtracting(false);
+    }
+  };
   const textPanelRef = useRef(null);
   const dividePanelRef = useRef(null);
 
@@ -1228,11 +1256,42 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                 className="flex-1 bg-slate-900 border border-slate-700 rounded-xl p-4 text-sm text-slate-300 font-mono focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none leading-relaxed"
                 placeholder={'Cole o texto completo do prontuário aqui...\n\n15/03/2022\nPaciente retorna...\nLead D: 0--0 / 1,4 mA / 180hz / 90mS\n\n22/06/2022\n...'}
               />
-              <button onClick={()=>{if(rawText.trim()){autoDetectDates(rawText);setTextReady(true);}}}
-                disabled={!rawText.trim()}
-                className="bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-900 font-black px-6 py-3 rounded-xl text-sm shadow-lg self-end transition-all">
-                Detectar Consultas →
-              </button>
+              <div className="flex items-center gap-2 self-end">
+                {aiAvailable && (
+                  <button onClick={handleAIExtract} disabled={!rawText.trim() || aiExtracting}
+                    className="bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white font-bold px-4 py-3 rounded-xl text-sm shadow-lg transition-all"
+                    title="Usa a IA local para extrair dados estruturados do prontuário">
+                    {aiExtracting ? '⟳ Extraindo…' : '✨ Extrair com IA'}
+                  </button>
+                )}
+                <button onClick={()=>{if(rawText.trim()){autoDetectDates(rawText);setTextReady(true);}}}
+                  disabled={!rawText.trim()}
+                  className="bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-900 font-black px-6 py-3 rounded-xl text-sm shadow-lg transition-all">
+                  Detectar Consultas →
+                </button>
+              </div>
+              {aiExtractResult && (
+                <div className="bg-slate-900 border border-violet-700 rounded-xl p-3 text-xs">
+                  {aiExtractResult.erro ? (
+                    <p className="text-rose-400">⚠ {aiExtractResult.erro}</p>
+                  ) : aiExtractResult.dados ? (
+                    <div className="flex flex-col gap-1">
+                      <p className="text-violet-300 font-bold text-[10px] uppercase tracking-wider">Dados extraídos pela IA</p>
+                      {aiExtractResult.dados.paciente?.nome && <p className="text-slate-300">Paciente: {aiExtractResult.dados.paciente.nome}</p>}
+                      {aiExtractResult.dados.dispositivo?.fabricante && <p className="text-slate-300">Dispositivo: {aiExtractResult.dados.dispositivo.fabricante} {aiExtractResult.dados.dispositivo.modelo_ipg||''}</p>}
+                      {aiExtractResult.dados.grupos?.length > 0 && (
+                        <p className="text-slate-400 text-[10px]">{aiExtractResult.dados.grupos.length} configuração(ões) de contato detectada(s)</p>
+                      )}
+                      <p className="text-amber-400 text-[9px] mt-1">A IA é um auxílio — confira sempre no fluxo manual abaixo.</p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-1">
+                      <p className="text-amber-400 text-[10px]">{aiExtractResult.aviso || 'Resposta da IA:'}</p>
+                      <pre className="text-slate-400 text-[9px] whitespace-pre-wrap max-h-32 overflow-y-auto">{aiExtractResult.bruto}</pre>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
             <div className="flex-1 flex flex-col gap-3 min-h-0">

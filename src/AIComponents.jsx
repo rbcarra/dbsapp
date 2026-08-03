@@ -65,21 +65,19 @@ export const AISettingsModal = ({ onClose, onSaved }) => {
           </div>
 
           <div>
-            <label className={labelCls}>URL do Ollama (LLM)</label>
-            <input value={config.ollamaUrl} onChange={e => setField('ollamaUrl', e.target.value)}
-              placeholder="https://meu-pc.local:11434" className={inputCls} />
+            <label className={labelCls}>URL do servidor (PC local)</label>
+            <input value={config.serverUrl} onChange={e => setField('serverUrl', e.target.value)}
+              placeholder="https://meu-pc.local:8765" className={inputCls} />
+            <p className="text-[9px] text-slate-400 mt-1">Um só endereço — o servidor faz proxy do Whisper e do Ollama.</p>
           </div>
 
           <div>
             <label className={labelCls}>Modelo Ollama</label>
             <input value={config.ollamaModel} onChange={e => setField('ollamaModel', e.target.value)}
               placeholder="llama3.1" className={inputCls} />
-          </div>
-
-          <div>
-            <label className={labelCls}>URL do serviço de transcrição (Whisper)</label>
-            <input value={config.transcribeUrl} onChange={e => setField('transcribeUrl', e.target.value)}
-              placeholder="https://meu-pc.local:9000" className={inputCls} />
+            {testResult?.modelos?.length > 0 && (
+              <p className="text-[9px] text-slate-400 mt-1">Disponíveis: {testResult.modelos.join(', ')}</p>
+            )}
           </div>
 
           <label className="flex items-center gap-2 cursor-pointer">
@@ -106,9 +104,14 @@ export const AISettingsModal = ({ onClose, onSaved }) => {
                 <div className="flex items-center gap-2 text-[10px]">
                   <span className={`w-2 h-2 rounded-full ${testResult.transcribe ? 'bg-emerald-500' : 'bg-rose-500'}`} />
                   <span className={testResult.transcribe ? 'text-emerald-600' : 'text-rose-600'}>
-                    Transcrição: {testResult.transcribe ? 'conectado' : 'sem resposta'}
+                    Whisper: {testResult.transcribe ? 'conectado' : 'sem resposta'}
                   </span>
                 </div>
+                {testResult.fila && (
+                  <div className="text-[9px] text-slate-400 pl-4">
+                    Fila: {testResult.fila.na_fila} aguardando · {testResult.fila.processando} processando · {testResult.fila.total_processado} total
+                  </div>
+                )}
               </div>
             )}
           </div>

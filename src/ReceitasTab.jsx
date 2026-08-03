@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { gerarRelatorio, getAIConfig } from './aiClient';
 
 // ─── COMPREHENSIVE MEDICATION PARSER ──────────────────────────────────────────
 // Handles: "Med Xmg X-Y-Z", "Med Xmg: ¾cp às Xh, ...", "Med Xmg Nx ao dia"
@@ -428,6 +429,7 @@ export const ReceitasSection = ({
   pacienteNome, enderecoSalvo, onEnderecoChange,
   notasLivres, prescricoesSalvas, onSalvarPrescricao,
   customDocs = [], onAddCustom, onDeleteCustom, onUpdateCustom,
+  aiEnabled = false, aiHealthOllama = false, transcricaoOrganizada = '',
 }) => {
   const dataHoje = new Date().toLocaleDateString('pt-BR', { day:'2-digit', month:'long', year:'numeric' });
   const meds = useMemo(() => parseMedsFromText(notasLivres), [notasLivres]);
@@ -540,6 +542,102 @@ export const ReceitasSection = ({
 
       {/* New custom document creator */}
       <NewDocForm pacienteNome={pacienteNome} enderecoSalvo={enderecoSalvo} onCreate={onAddCustom}/>
+
+      {/* AI report/prescription generator */}
+      <AIReportBlock
+        aiEnabled={aiEnabled}
+        aiHealthOllama={aiHealthOllama}
+        contexto={[notasLivres, transcricaoOrganizada].filter(Boolean).join('\n\n')}
+        onCreate={onAddCustom}
+      />
+    </div>
+  );
+};
+
+// ─── AI REPORT/PRESCRIPTION GENERATOR ────────────────────────────────────────
+const AIReportBlock = ({ aiEnabled, aiHealthOllama, contexto, onCreate }) => {
+  const [solicitacao, setSolicitacao] = useState('');
+  const [resultado, setResultado] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [erro, setErro] = useState('');
+
+  const gerar = async () => {
+    if (!solicitacao.trim()) return;
+    setBusy(true); setErro(''); setResultado('');
+    try {
+      const texto = await gerarRelatorio({ solicitacao, contexto, config: getAIConfig() });
+      setResultado(texto);
+    } catch (e) {
+      setErro(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const status = !aiEnabled ? 'off' : aiHealthOllama ? 'ok' : 'off';
+  const dot = status === 'ok' ? 'bg-emerald-500' : 'bg-rose-500';
+
+  const exemplos = [
+    'Relatório para perícia do INSS descrevendo o quadro de Parkinson e limitações',
+    'Carta de encaminhamento para fisioterapia motora',
+    'Atestado de comparecimento à consulta hoje',
+    'Relatório de indicação de DBS com histórico de tratamento',
+  ];
+
+  return (
+    <div className="rounded-xl border border-violet-200 bg-violet-50/40 overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2.5 bg-violet-50 border-b border-violet-100">
+        <span className="text-xs font-bold text-violet-700 uppercase tracking-wider flex items-center gap-2">
+          ✨ Gerar receita/relatório com IA
+        </span>
+        <span className={`w-2.5 h-2.5 rounded-full ${dot} ring-2 ring-white shadow`}
+          title={status === 'ok' ? 'IA conectada' : 'IA desconectada'} />
+      </div>
+      <div className="p-4 flex flex-col gap-2">
+        <p className="text-[10px] text-slate-500">
+          Descreva o documento desejado. A IA usa a evolução e a transcrição organizada como contexto.
+        </p>
+        <div className="flex flex-wrap gap-1">
+          {exemplos.map((ex, i) => (
+            <button key={i} onClick={() => setSolicitacao(ex)}
+              className="text-[9px] bg-white border border-violet-200 hover:border-violet-400 text-violet-600 rounded-full px-2 py-0.5 transition-all">
+              {ex.length > 40 ? ex.slice(0, 40) + '…' : ex}
+            </button>
+          ))}
+        </div>
+        <textarea
+          value={solicitacao}
+          onChange={e => setSolicitacao(e.target.value)}
+          placeholder="Ex: Relatório médico para perícia descrevendo o quadro atual e resposta ao DBS..."
+          rows={2}
+          className="w-full text-xs bg-white border border-slate-200 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-violet-400 resize-y text-slate-700"
+        />
+        <button onClick={gerar} disabled={!aiEnabled || busy || !solicitacao.trim()}
+          className="self-start text-xs font-bold bg-violet-600 hover:bg-violet-700 text-white px-4 py-1.5 rounded-lg transition-all disabled:opacity-40">
+          {busy ? '⟳ Gerando…' : '✨ Gerar documento'}
+        </button>
+        {erro && <div className="text-[10px] text-rose-600 bg-rose-50 border border-rose-200 rounded px-2 py-1">⚠ {erro}</div>}
+        {resultado && (
+          <div className="mt-1">
+            <textarea
+              value={resultado}
+              onChange={e => setResultado(e.target.value)}
+              rows={8}
+              className="w-full text-[11px] font-mono text-slate-700 bg-white border border-slate-200 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-violet-400 resize-y leading-relaxed"
+            />
+            <div className="flex gap-2 mt-1">
+              <button onClick={() => onCreate?.({ id: Date.now().toString(), titulo: 'Documento IA', texto: resultado })}
+                className="text-[10px] font-bold bg-violet-600 hover:bg-violet-700 text-white px-3 py-1.5 rounded-lg">
+                ＋ Salvar como documento
+              </button>
+              <button onClick={() => { const w=window.open('','_blank'); w.document.write(`<html><body style="font-family:Arial;max-width:600px;margin:40px auto;font-size:13px;white-space:pre-wrap">${resultado.replace(/</g,'&lt;')}</body></html>`); w.print(); }}
+                className="text-[10px] font-bold bg-white border border-slate-200 hover:border-slate-400 text-slate-600 px-3 py-1.5 rounded-lg">🖨 Imprimir</button>
+              <button onClick={() => navigator.clipboard.writeText(resultado)}
+                className="text-[10px] text-slate-400 hover:text-slate-600 px-2 py-1.5">📋 Copiar</button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
