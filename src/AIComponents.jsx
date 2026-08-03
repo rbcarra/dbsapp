@@ -72,6 +72,13 @@ export const AISettingsModal = ({ onClose, onSaved }) => {
           </div>
 
           <div>
+            <label className={labelCls}>Token de acesso (API_TOKEN)</label>
+            <input type="password" value={config.apiToken || ''} onChange={e => setField('apiToken', e.target.value)}
+              placeholder="cole aqui o token do servidor" className={inputCls} />
+            <p className="text-[9px] text-slate-400 mt-1">Deve ser igual ao API_TOKEN definido no servidor (contorna o login do Cloudflare Access).</p>
+          </div>
+
+          <div>
             <label className={labelCls}>Modelo Ollama</label>
             <input value={config.ollamaModel} onChange={e => setField('ollamaModel', e.target.value)}
               placeholder="llama3.1" className={inputCls} />

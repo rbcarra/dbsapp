@@ -6,7 +6,8 @@
 const LS_KEY = 'dbs_ai_config';
 
 const DEFAULT_CONFIG = {
-  serverUrl: 'https://transcritor.rafaelcarra.com.br:8765',
+  serverUrl: '',        // ex: https://meu-pc.local:8765  (servidor.py com extensão de IA)
+  apiToken: '',         // token compartilhado (deve bater com API_TOKEN do servidor)
   ollamaModel: 'llama3.1',
   enabled: false,
 };
@@ -37,6 +38,9 @@ export const saveAIConfig = (config) => {
 
 const base = (cfg) => (cfg.serverUrl || '').replace(/\/$/, '');
 
+// Cabeçalho de autorização (token compartilhado). Vazio se não configurado.
+const authHeaders = (cfg) => cfg.apiToken ? { 'Authorization': `Bearer ${cfg.apiToken}` } : {};
+
 // ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
 // Um único /health consolidado retorna o estado de Whisper + Ollama + fila.
 export const checkHealth = async (config) => {
@@ -46,7 +50,7 @@ export const checkHealth = async (config) => {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 4000);
-    const res = await fetch(base(cfg) + '/health', { method: 'GET', signal: ctrl.signal });
+    const res = await fetch(base(cfg) + '/api/health', { method: 'GET', signal: ctrl.signal, headers: { ...authHeaders(cfg) } });
     clearTimeout(timer);
     if (res.ok) {
       const data = await res.json();
@@ -69,7 +73,7 @@ export const ollamaGenerate = async ({ prompt, system, config, model }) => {
   if (system) body.system = system;
   const res = await fetch(base(cfg) + '/api/generate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders(cfg) },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`Servidor respondeu ${res.status}: ${res.statusText}`);
@@ -101,7 +105,7 @@ export const transcribeAudio = async ({ audioBlob, config, initialPrompt }) => {
   form.append('audio', audioBlob, 'consulta.webm');
   form.append('initial_prompt', initialPrompt || MEDICAL_GLOSSARY);
   form.append('language', 'pt');
-  const res = await fetch(base(cfg) + '/transcribe', { method: 'POST', body: form });
+  const res = await fetch(base(cfg) + '/api/transcribe', { method: 'POST', headers: { ...authHeaders(cfg) }, body: form });
   if (!res.ok) throw new Error(`Servidor de transcrição respondeu ${res.status}: ${res.statusText}`);
   const data = await res.json();
   if (data.erro) throw new Error(data.erro);
@@ -112,9 +116,9 @@ export const transcribeAudio = async ({ audioBlob, config, initialPrompt }) => {
 export const organizarTranscricao = async ({ transcricao, contexto, config, model }) => {
   const cfg = config || getAIConfig();
   if (!cfg.serverUrl) throw new Error('URL do servidor não configurada.');
-  const res = await fetch(base(cfg) + '/organizar', {
+  const res = await fetch(base(cfg) + '/api/organizar', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders(cfg) },
     body: JSON.stringify({ transcricao, contexto, model: model || cfg.ollamaModel }),
   });
   if (!res.ok) throw new Error(`Servidor respondeu ${res.status}`);
@@ -127,9 +131,9 @@ export const organizarTranscricao = async ({ transcricao, contexto, config, mode
 export const extrairProntuario = async ({ prontuario, config, model }) => {
   const cfg = config || getAIConfig();
   if (!cfg.serverUrl) throw new Error('URL do servidor não configurada.');
-  const res = await fetch(base(cfg) + '/extrair', {
+  const res = await fetch(base(cfg) + '/api/extrair', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders(cfg) },
     body: JSON.stringify({ prontuario, model: model || cfg.ollamaModel }),
   });
   if (!res.ok) throw new Error(`Servidor respondeu ${res.status}`);
@@ -142,9 +146,9 @@ export const extrairProntuario = async ({ prontuario, config, model }) => {
 export const gerarRelatorio = async ({ solicitacao, contexto, config, model }) => {
   const cfg = config || getAIConfig();
   if (!cfg.serverUrl) throw new Error('URL do servidor não configurada.');
-  const res = await fetch(base(cfg) + '/relatorio', {
+  const res = await fetch(base(cfg) + '/api/relatorio', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders(cfg) },
     body: JSON.stringify({ solicitacao, contexto, model: model || cfg.ollamaModel }),
   });
   if (!res.ok) throw new Error(`Servidor respondeu ${res.status}`);
@@ -157,9 +161,9 @@ export const gerarRelatorio = async ({ solicitacao, contexto, config, model }) =
 export const promptDireto = async ({ prompt, system, config, model }) => {
   const cfg = config || getAIConfig();
   if (!cfg.serverUrl) throw new Error('URL do servidor não configurada.');
-  const res = await fetch(base(cfg) + '/prompt', {
+  const res = await fetch(base(cfg) + '/api/prompt', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders(cfg) },
     body: JSON.stringify({ prompt, system, model: model || cfg.ollamaModel }),
   });
   if (!res.ok) throw new Error(`Servidor respondeu ${res.status}`);

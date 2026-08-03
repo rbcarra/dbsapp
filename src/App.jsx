@@ -272,8 +272,6 @@ export default function App() {
       setVoltagemBateria("");
       setImpedanciaL("");
       setImpedanciaR("");
-      setCyclingL(false);
-      setCyclingR(false);
       setMarcadoresClinicosL([]);
       setMarcadoresClinicosR([]);
       setEditingSessionId(null);
@@ -949,7 +947,7 @@ export default function App() {
       setTipoEletrodo('4-ring'); setDadosGrupos(emptyGrupos);
       setClinica({ tremor:0, rigidez:0, bradicinesia:0 }); setEfeitosColaterais({ L:[], R:[] });
       setNotasLivres(''); setResumoSessao(''); setVoltagemBateria('');
-      setImpedanciaL(''); setImpedanciaR(''); setCyclingL(false); setCyclingR(false);
+      setImpedanciaL(''); setImpedanciaR('');
       setMarcadoresClinicosL([]); setMarcadoresClinicosR([]); setTendenciasEstimulacao('');
       setEditingSessionId(docRef.id);
       showToast("Sessão vazia criada!");

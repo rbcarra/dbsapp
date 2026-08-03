@@ -45,8 +45,9 @@ from typing import Optional, Callable
 
 import numpy as np
 import requests as http_requests
-from fastapi import UploadFile, File, Form, Request
+from fastapi import UploadFile, File, Form, Request, Header, HTTPException, APIRouter
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 log = logging.getLogger("extensao_ia")
 
@@ -56,6 +57,16 @@ log = logging.getLogger("extensao_ia")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL_PADRAO = os.environ.get("OLLAMA_MODEL", "llama3.1")
 OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "180"))  # segundos
+
+# Token compartilhado (substitui a proteção do Cloudflare Access p/ chamadas via fetch).
+# Defina API_TOKEN no ambiente antes de subir o servidor. Se vazio, a checagem é DESLIGADA
+# (útil só para testes em rede local — em produção sempre defina um token).
+API_TOKEN = os.environ.get("API_TOKEN", "").strip()
+
+# Domínios do app autorizados a chamar a API (CORS). Separe por vírgula em ALLOWED_ORIGINS.
+# Ex: ALLOWED_ORIGINS="https://dbslog.rafaelcarra.com.br,https://dbsapp.vercel.app"
+_origins_raw = os.environ.get("ALLOWED_ORIGINS", "").strip()
+ALLOWED_ORIGINS = [o.strip() for o in _origins_raw.split(",") if o.strip()] or ["*"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FILA DE CONCORRÊNCIA
@@ -244,6 +255,15 @@ def _ollama_generate(prompt: str, model: str = None, system: str = None) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # MONTAGEM DOS ENDPOINTS
 # ─────────────────────────────────────────────────────────────────────────────
+def _verificar_token(authorization: Optional[str]):
+    """Recusa requisições sem o token correto. Se API_TOKEN estiver vazio, não checa."""
+    if not API_TOKEN:
+        return  # checagem desligada (testes locais)
+    esperado = f"Bearer {API_TOKEN}"
+    if authorization != esperado:
+        raise HTTPException(status_code=401, detail="Token inválido ou ausente.")
+
+
 def montar_extensao_ia(
     app,
     get_modelo_whisper: Callable,
@@ -260,10 +280,27 @@ def montar_extensao_ia(
                              Se None, usa a implementação padrão deste módulo.
     """
     transcrever = transcrever_audio_bytes or _transcrever_padrao
-    loop = asyncio.get_event_loop() if False else None  # placeholder; usamos run_in_executor
+
+    # CORS: permite que o app (outro domínio) chame estes endpoints via fetch
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=ALLOWED_ORIGINS,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
+    log.info(f"CORS liberado para: {ALLOWED_ORIGINS}")
+    if API_TOKEN:
+        log.info("Proteção por API_TOKEN: ATIVADA")
+    else:
+        log.warning("API_TOKEN vazio — endpoints SEM proteção de token (use só em rede local)")
+
+    # Router com prefixo /api — todas as rotas ficam sob /api/... para o Cloudflare
+    # cobrir com um único curinga api/* na regra de Bypass.
+    router = APIRouter(prefix="/api")
 
     # ── HEALTH ────────────────────────────────────────────────────────────────
-    @app.get("/health")
+    @router.get("/health")
     async def health():
         ollama_ok = False
         modelos_ollama = []
@@ -289,12 +326,14 @@ def montar_extensao_ia(
         }
 
     # ── TRANSCRIBE (upload único) ─────────────────────────────────────────────
-    @app.post("/transcribe")
+    @router.post("/transcribe")
     async def transcribe(
         audio: UploadFile = File(...),
         initial_prompt: str = Form(None),
         language: str = Form("pt"),
+        authorization: Optional[str] = Header(None),
     ):
+        _verificar_token(authorization)
         audio_bytes = await audio.read()
         vocab = initial_prompt or vocab_medico
         modelo = get_modelo_whisper()
@@ -314,8 +353,9 @@ def montar_extensao_ia(
                 return JSONResponse({"erro": str(e)}, status_code=500)
 
     # ── OLLAMA PROXY (/api/generate) ──────────────────────────────────────────
-    @app.post("/api/generate")
-    async def api_generate(request: Request):
+    @router.post("/generate")
+    async def api_generate(request: Request, authorization: Optional[str] = Header(None)):
+        _verificar_token(authorization)
         body = await request.json()
         prompt = body.get("prompt", "")
         model = body.get("model")
@@ -332,8 +372,9 @@ def montar_extensao_ia(
                 return JSONResponse({"erro": str(e)}, status_code=500)
 
     # ── EXTRAIR PRONTUÁRIO ────────────────────────────────────────────────────
-    @app.post("/extrair")
-    async def extrair(request: Request):
+    @router.post("/extrair")
+    async def extrair(request: Request, authorization: Optional[str] = Header(None)):
+        _verificar_token(authorization)
         body = await request.json()
         prontuario = body.get("prontuario", "")
         model = body.get("model")
@@ -364,8 +405,9 @@ def montar_extensao_ia(
                 return JSONResponse({"erro": str(e)}, status_code=500)
 
     # ── RELATÓRIO / RECEITA ───────────────────────────────────────────────────
-    @app.post("/relatorio")
-    async def relatorio(request: Request):
+    @router.post("/relatorio")
+    async def relatorio(request: Request, authorization: Optional[str] = Header(None)):
+        _verificar_token(authorization)
         body = await request.json()
         solicitacao = body.get("solicitacao", "")
         contexto = body.get("contexto", "")
@@ -386,8 +428,9 @@ def montar_extensao_ia(
                 return JSONResponse({"erro": str(e)}, status_code=500)
 
     # ── ORGANIZAR TRANSCRIÇÃO ─────────────────────────────────────────────────
-    @app.post("/organizar")
-    async def organizar(request: Request):
+    @router.post("/organizar")
+    async def organizar(request: Request, authorization: Optional[str] = Header(None)):
+        _verificar_token(authorization)
         body = await request.json()
         transcricao = body.get("transcricao", "")
         contexto = body.get("contexto", "")
@@ -408,8 +451,9 @@ def montar_extensao_ia(
                 return JSONResponse({"erro": str(e)}, status_code=500)
 
     # ── PROMPT DIRETO ─────────────────────────────────────────────────────────
-    @app.post("/prompt")
-    async def prompt_direto(request: Request):
+    @router.post("/prompt")
+    async def prompt_direto(request: Request, authorization: Optional[str] = Header(None)):
+        _verificar_token(authorization)
         body = await request.json()
         texto_prompt = body.get("prompt", "")
         model = body.get("model")
@@ -427,5 +471,8 @@ def montar_extensao_ia(
                 log.exception("Erro no prompt")
                 return JSONResponse({"erro": str(e)}, status_code=500)
 
-    log.info("Extensão de IA montada: /transcribe /health /api/generate /extrair /relatorio /organizar /prompt")
+    app.include_router(router)
+    log.info("Extensão de IA montada sob /api: "
+             "/api/health /api/transcribe /api/generate /api/extrair "
+             "/api/relatorio /api/organizar /api/prompt")
     return app

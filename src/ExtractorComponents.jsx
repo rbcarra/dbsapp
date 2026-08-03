@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { ORDEM_TEXTO_BAIXO_CIMA, getContatosIniciais, EFEITO_OPTS, convertParsedGrupos } from './constants';
 import { ProgrammingEditor } from './ProgrammingEditor';
+import { extrairProntuario, getAIConfig, checkHealth } from './aiClient';
 
 // Button classes for extractor feedback buttons (dark theme)
 const efeitoExtCls = (val) => ({
