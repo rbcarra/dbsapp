@@ -343,6 +343,13 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao, transcricaoBruta, transcricaoOrganizada, voltagemBateria, impedanciaL, impedanciaR, marcadoresClinicosL, marcadoresClinicosR, editingSessionId, user, activePatient, isInitializing, showLoginModal]);
 
+  // A sessão em edição é "antiga" (não é a mais recente ativa)?
+  const editandoSessaoAntiga = React.useMemo(() => {
+    if (!editingSessionId) return false;
+    const ativos = sessions.filter(s => s.type === 'active').sort((a,b) => b.timestamp - a.timestamp);
+    return ativos.length > 0 && ativos[0].id !== editingSessionId;
+  }, [editingSessionId, sessions]);
+
   const historicoReal = useMemo(() => {
     const map = new Map();
     sessions.filter(s => s.type === 'active' && s.id !== editingSessionId).forEach(sess => {
@@ -1058,13 +1065,6 @@ export default function App() {
       showToast('Modo nova sessão');
     }
   };
-
-  // A sessão em edição é "antiga" (não é a mais recente ativa)?
-  const editandoSessaoAntiga = React.useMemo(() => {
-    if (!editingSessionId) return false;
-    const ativos = sessions.filter(s => s.type === 'active').sort((a,b) => b.timestamp - a.timestamp);
-    return ativos.length > 0 && ativos[0].id !== editingSessionId;
-  }, [editingSessionId, sessions]);
 
   const handleCopiarUltimaSessao = () => {
     const ultimaAtiva = sessions.find(s => s.type === 'active');
