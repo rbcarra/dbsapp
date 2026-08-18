@@ -14,6 +14,7 @@ import { UPDRSModal } from './UPDRSComponents';
 import { ScalesModal } from './ScalesComponents';
 import { JSONImportModal } from './JSONImportModal';
 import { ProgrammingEditor } from './ProgrammingEditor';
+import { SessionSidebar } from './SessionSidebar';
 import { AIStatusLight, AISettingsModal, AudioRecorderButton } from './AIComponents';
 import { getAIConfig, checkHealth, ollamaGenerate, transcribeAudio, buildOrganizePrompt } from './aiClient';
 import { LEDCalculator, TEEDCalculator } from './CalculadorasTab';
@@ -149,6 +150,8 @@ export default function App() {
   });
   const [showExtrator, setShowExtrator] = useState(false);
   const [confirmNewSession, setConfirmNewSession] = useState(null); // null | 'copy' | 'empty'
+  const [confirmUpdateOld, setConfirmUpdateOld] = useState(false); // confirm overwrite of closed record
+  const [sidebarAberta, setSidebarAberta] = useState(true);
   const [showHistoricoText, setShowHistoricoText] = useState(false);
   const [showUPDRS, setShowUPDRS] = useState(false);
   const [showScales, setShowScales] = useState(false);
@@ -400,6 +403,8 @@ export default function App() {
   const autoSaveTimerRef = React.useRef(null);
   React.useEffect(() => {
     if (!editingSessionId || !user || !activePatient || isInitializing) return;
+    // Autosave DESLIGADO para sessões antigas — exige "Salvar" manual com confirmação
+    if (editandoSessaoAntiga) { setAutoSaveStatus('idle'); return; }
     setAutoSaveStatus('saving');
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current = setTimeout(async () => {
@@ -423,7 +428,7 @@ export default function App() {
     return () => { if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current); };
   }, [tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao, transcricaoBruta, transcricaoOrganizada,
       voltagemBateria, impedanciaL, impedanciaR,
-      marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao, editingSessionId]);
+      marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao, editingSessionId, editandoSessaoAntiga]);
 
   const gerarTextoProntuario = (grupos, eletrodo) => {
     let text = '';
@@ -862,6 +867,15 @@ export default function App() {
   // to the app's format (contatos as object {0:{state:'-',perc:100},...})
 
 
+  // Guard: salvar sobre registro antigo exige confirmação
+  const handleSalvarComGuarda = (modoAtualizar) => {
+    if (modoAtualizar && editandoSessaoAntiga) {
+      setConfirmUpdateOld(true);
+      return;
+    }
+    handleSalvarSessao(modoAtualizar);
+  };
+
   const handleSalvarSessao = async (modoAtualizar = false) => {
     if (!user || !activePatient) return;
     
@@ -995,6 +1009,62 @@ export default function App() {
     setIsPanelOpen(false);
     showToast(sess.type === 'active' ? "Sessão carregada para edição" : "Visualizando sessão antiga");
   };
+
+  // Snapshot do rascunho atual (para restaurar ao sair de uma sessão antiga — opção B)
+  const rascunhoSnapshotRef = React.useRef(null);
+
+  const capturarEstadoAtual = () => ({
+    tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais,
+    notasLivres, resumoSessao, transcricaoBruta, transcricaoOrganizada,
+    voltagemBateria, impedanciaL, impedanciaR,
+    marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao,
+  });
+
+  const aplicarEstado = (s) => {
+    setTipoEletrodo(s.tipoEletrodo || '4-ring');
+    try { setDadosGrupos(capPrograms(normalizeGrupos(s.dadosGrupos, s.tipoEletrodo||'4-ring')) || s.dadosGrupos); } catch(e){}
+    setModoAmplitude(s.modoAmplitude || 'mA');
+    setDispositivoInfo(s.dispositivoInfo || { fabricante:'', modeloIPG:'', modeloEletrodoE:'', modeloEletrodoD:'', alvoAnatomicoE:'', alvoAnatomicoD:'', dataImplante:'', dataTrocaIPG:'' });
+    setClinica(s.clinica || { tremor:0, rigidez:0, bradicinesia:0 });
+    setEfeitosColaterais(s.efeitosColaterais || { L:[], R:[] });
+    setNotasLivres(s.notasLivres || '');
+    setResumoSessao(s.resumoSessao || '');
+    setTranscricaoBruta(s.transcricaoBruta || '');
+    setTranscricaoOrganizada(s.transcricaoOrganizada || '');
+    setVoltagemBateria(s.voltagemBateria || '');
+    setImpedanciaL(s.impedanciaL || '');
+    setImpedanciaR(s.impedanciaR || '');
+    setMarcadoresClinicosL(s.marcadoresClinicosL || []);
+    setMarcadoresClinicosR(s.marcadoresClinicosR || []);
+    setTendenciasEstimulacao(s.tendenciasEstimulacao || '');
+  };
+
+  // Abre uma sessão antiga preservando o rascunho atual (opção B)
+  const abrirSessaoComPreservacao = (sess) => {
+    // Se estamos num rascunho (sem editingSessionId), guarda o snapshot antes de sair
+    if (!editingSessionId) {
+      rascunhoSnapshotRef.current = capturarEstadoAtual();
+    }
+    loadSession(sess);
+  };
+
+  // Volta ao rascunho preservado (sai do modo edição de sessão antiga)
+  const voltarAoRascunho = () => {
+    setEditingSessionId(null);
+    if (rascunhoSnapshotRef.current) {
+      aplicarEstado(rascunhoSnapshotRef.current);
+      showToast('Rascunho restaurado');
+    } else {
+      showToast('Modo nova sessão');
+    }
+  };
+
+  // A sessão em edição é "antiga" (não é a mais recente ativa)?
+  const editandoSessaoAntiga = React.useMemo(() => {
+    if (!editingSessionId) return false;
+    const ativos = sessions.filter(s => s.type === 'active').sort((a,b) => b.timestamp - a.timestamp);
+    return ativos.length > 0 && ativos[0].id !== editingSessionId;
+  }, [editingSessionId, sessions]);
 
   const handleCopiarUltimaSessao = () => {
     const ultimaAtiva = sessions.find(s => s.type === 'active');
@@ -1536,30 +1606,6 @@ ${progTexto}Avaliação: ${textoEfeito}
               {autoSaveStatus === 'saving' ? '⟳ salvando...' : autoSaveStatus === 'saved' ? '✓ salvo' : '⚠ erro'}
             </span>
           )}
-          {editingSessionId && <span className="text-[9px] text-slate-500 font-mono hidden lg:inline">editando</span>}
-          {/* Smart save: if editing or last session <3h, show "Salvar Sessão"; otherwise "Criar nova copiando" */}
-          {(() => {
-            const lastActive = sessions.filter(s => s.type === 'active')[0];
-            const lastIsRecent = lastActive && (Date.now() - (lastActive.timestamp || 0)) < 3 * 60 * 60 * 1000;
-            const shouldSaveOver = editingSessionId || lastIsRecent;
-            return shouldSaveOver ? (
-              <button onClick={() => handleSalvarSessao(true)}
-                className="px-3 py-1.5 rounded font-bold text-sm transition-colors shadow-sm whitespace-nowrap bg-indigo-600 hover:bg-indigo-700 text-white">
-                💾 Salvar Sessão
-              </button>
-            ) : (
-              <button onClick={() => tryCreateSession('copy')}
-                className="px-3 py-1.5 rounded font-bold text-sm transition-colors shadow-sm whitespace-nowrap bg-indigo-600 hover:bg-indigo-700 text-white"
-                title="Cria nova sessão com os dados atuais copiados">
-                💾 Criar nova sessão copiando dados
-              </button>
-            );
-          })()}
-          <button onClick={() => tryCreateSession('empty')}
-            className="px-3 py-1.5 rounded font-bold text-sm transition-colors shadow-sm whitespace-nowrap bg-slate-600 hover:bg-slate-700 text-white"
-            title="Cria sessão nova completamente vazia">
-            ✦ Criar sessão vazia
-          </button>
           <label className="flex items-center gap-1.5 cursor-pointer bg-slate-800 rounded px-2 py-1.5 shrink-0" title="Se ativo, contatos com % diferentes são tratados como configurações distintas na timeline">
             <input type="checkbox" checked={considerarAmplitude} onChange={e => setConsiderarAmplitude(e.target.checked)} className="accent-indigo-400 w-3.5 h-3.5" />
             <span className="text-[10px] font-bold text-slate-300 uppercase tracking-wider whitespace-nowrap">Div. Amplitude</span>
@@ -1587,43 +1633,8 @@ ${progTexto}Avaliação: ${textoEfeito}
         </div>
       )}
 
-      {editingSessionId && (
-        <div className="bg-amber-100 text-amber-800 px-4 py-1 flex items-center justify-between text-xs font-bold border-b border-amber-200">
-          <span>Editando registro antigo (Salvar irá sobrescrever e criar backup da original)</span>
-          <button onClick={() => setEditingSessionId(null)} className="underline text-amber-700 hover:text-amber-900">Sair do modo edição (Nova Sessão)</button>
-        </div>
-      )}
-
-      <main className="p-4 w-full flex-1 flex flex-col gap-3 overflow-y-auto">
-
-        {/* BANNER DE SESSÃO */}
-        {(() => {
-          const ativos = sessions.filter(s => s.type === 'active').sort((a,b) => b.timestamp - a.timestamp);
-          const sesAtual = editingSessionId ? ativos.find(s => s.id === editingSessionId) : null;
-          const isMostRecent = ativos.length > 0 && ativos[0].id === editingSessionId;
-          const isToday = sesAtual && new Date(sesAtual.timestamp).toDateString() === new Date().toDateString();
-          const label = !editingSessionId
-            ? '📝 Rascunho não salvo'
-            : isMostRecent && isToday
-              ? '📅 Sessão de hoje'
-              : `📅 Sessão de ${formatarData(sesAtual?.timestamp || 0)}`;
-          const colorCls = !editingSessionId
-            ? 'bg-amber-50 border-amber-200 text-amber-700'
-            : isMostRecent
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-              : 'bg-indigo-50 border-indigo-200 text-indigo-700';
-          return (
-            <div className={`flex items-center justify-between px-3 py-1.5 rounded-lg border text-xs font-bold mb-1 ${colorCls}`}>
-              <span>{label}</span>
-              {sesAtual && (
-                <span className="font-normal text-[10px] opacity-70">
-                  {formatarData(sesAtual.timestamp)}
-                  {!isMostRecent && ' — sessão anterior'}
-                </span>
-              )}
-            </div>
-          );
-        })()}
+      <div className="flex-1 flex min-h-0">
+      <main className="p-4 flex-1 flex flex-col gap-3 overflow-y-auto min-w-0">
 
         {/* TAB BAR */}
         <div className="flex gap-1 mb-3 border-b border-slate-200 pb-1">
@@ -2229,6 +2240,21 @@ ${progTexto}Avaliação: ${textoEfeito}
 
       </main>
 
+      <SessionSidebar
+        sessions={sessions}
+        editingSessionId={editingSessionId}
+        editandoSessaoAntiga={editandoSessaoAntiga}
+        autoSaveStatus={autoSaveStatus}
+        onOpenSession={abrirSessaoComPreservacao}
+        onSalvar={handleSalvarComGuarda}
+        onCriarCopiando={() => tryCreateSession('copy')}
+        onCriarVazia={() => tryCreateSession('empty')}
+        onVoltarRascunho={voltarAoRascunho}
+        aberto={sidebarAberta}
+        onToggle={() => setSidebarAberta(v => !v)}
+      />
+      </div>
+
       {/* MODAL MONOPOLAR REVIEW */}
       {showMonopolar && (() => {
         const todosL_raw = [...marcadoresHistoricos.L, ...marcadoresClinicosL];
@@ -2383,6 +2409,34 @@ ${progTexto}Avaliação: ${textoEfeito}
         );
       })()}
 
+
+      {/* CONFIRM UPDATE OLD SESSION MODAL */}
+      {confirmUpdateOld && (() => {
+        const ativos = sessions.filter(s => s.type === 'active').sort((a,b) => b.timestamp - a.timestamp);
+        const sess = ativos.find(s => s.id === editingSessionId);
+        return (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4">
+              <h3 className="font-bold text-slate-800 text-base mb-1">⚠ Alterar registro encerrado</h3>
+              <p className="text-sm text-slate-500 mb-5">
+                Você está prestes a alterar um registro já encerrado
+                {sess ? ` de ${formatarData(sess.timestamp)}` : ''}. Uma cópia de backup da versão
+                original será criada. Deseja continuar?
+              </p>
+              <div className="flex flex-col gap-2">
+                <button onClick={() => { setConfirmUpdateOld(false); handleSalvarSessao(true); }}
+                  className="w-full py-2.5 rounded-xl font-bold text-sm bg-rose-600 hover:bg-rose-700 text-white transition-colors">
+                  Sim, alterar o registro
+                </button>
+                <button onClick={() => setConfirmUpdateOld(false)}
+                  className="w-full py-2.5 rounded-xl font-bold text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors">
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* CONFIRM NEW SESSION MODAL */}
       {confirmNewSession && (() => {
@@ -2708,7 +2762,7 @@ ${progTexto}Avaliação: ${textoEfeito}
                     }`}
                   >
                     <div className="flex justify-between items-start mb-1">
-                      <div className="flex items-center gap-2 cursor-pointer flex-1" onClick={() => loadSession(sess)}>
+                      <div className="flex items-center gap-2 cursor-pointer flex-1" onClick={() => abrirSessaoComPreservacao(sess)}>
                         <span className={`text-sm font-bold ${isActive ? 'text-slate-800' : isDeleted ? 'text-rose-500 line-through' : 'text-slate-500'}`}>
                           {formatarData(sess.timestamp)} 
                         </span>
@@ -2731,7 +2785,7 @@ ${progTexto}Avaliação: ${textoEfeito}
                       </div>
                     </div>
                     
-                    <p className={`text-xs line-clamp-2 mt-2 italic cursor-pointer ${isDeleted ? 'text-rose-400/80' : 'text-slate-500'}`} onClick={() => loadSession(sess)}>
+                    <p className={`text-xs line-clamp-2 mt-2 italic cursor-pointer ${isDeleted ? 'text-rose-400/80' : 'text-slate-500'}`} onClick={() => abrirSessaoComPreservacao(sess)}>
                       {sess.resumoSessao ? `"${sess.resumoSessao}"` : sess.notasLivres ? `"${sess.notasLivres.slice(0,80)}"` : "Sem resumo."}
                     </p>
                     
