@@ -1702,7 +1702,7 @@ ${progTexto}Avaliação: ${textoEfeito}
             onFocus={(e) => { e.target.style.height = 'auto'; e.target.style.height = Math.max(60, e.target.scrollHeight) + 'px'; }}
             placeholder="Cole ou registre aqui a evolução do paciente..."
             rows={2}
-            style={{ minHeight: '60px', height: notasLivres ? 'auto' : '60px' }}
+            style={{ minHeight: '600px', height: notasLivres ? 'auto' : '600px' }}
             className="w-full p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none text-slate-700 leading-relaxed overflow-hidden"
           />
           <div className="flex items-center justify-between mt-2">
