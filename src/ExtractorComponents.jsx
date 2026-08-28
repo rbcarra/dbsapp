@@ -678,7 +678,7 @@ const CSV_SIDES = [['E','L'],['D','R']];
 
 // Cabeçalho único compartilhado
 const CSV_HEADER = (() => {
-  const h = ['Nome','HC','Data','Resumo','Eletrodo','Bateria(V)',
+  const h = ['Nome','HC','Data','NotasLivres','Eletrodo','Bateria(V)',
     'ImpedanciaE','ImpedanciaD','CyclingE','CyclingD'];
   CSV_GKS.forEach(g => CSV_SIDES.forEach(([ln]) => {
     h.push('Grupo'+g+'_Lead'+ln+'_Contatos');
@@ -707,7 +707,7 @@ const buildCSVString = (rows) => {
   rows.forEach(r => {
     const parsed = r.parsed || {};
     const row = [];
-    row.push(r.nome, r.hc, r.date, r.resumo || '', '4-ring','','','','Não','Não');
+    row.push(r.nome, r.hc, r.date, r.NotasLivres || '', '4-ring','','','','Não','Não');
     CSV_GKS.forEach(g => {
       CSV_SIDES.forEach(([, s]) => {
         const progs = parsed[g] && parsed[g][s];
@@ -1097,7 +1097,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
         const impLFromProg = Object.values(parsed).flatMap(s=>(s.L||[])).find(p=>p.impedancia)?.impedancia;
         const impRFromProg = Object.values(parsed).flatMap(s=>(s.R||[])).find(p=>p.impedancia)?.impedancia;
 
-        return { nome, hc, date: parseDate(d.date||''), resumo:'',
+        return { nome, hc, date: parseDate(d.date||''), NotasLivres:'',
                  evolution: d.evolution||'', programmingRaw: d.programming||'',
                  parsed, efeitosGrupos, tipoEletrodo: tipoEl,
                  voltagemBateria: bateria !== null ? String(bateria) : '',
