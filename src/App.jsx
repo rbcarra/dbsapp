@@ -4,7 +4,9 @@ import { collection, doc, setDoc, getDoc, onSnapshot, addDoc, deleteDoc, updateD
 
 import { ORDEM_TEXTO_BAIXO_CIMA, MARCADOR_LETRAS, EFEITO_OPTS, getEfeitoCor,
   opacidadeMarcador, getContatosIniciais, getStringConfig, formatarData,
-  convertParsedGrupos, criarProgramaVazio } from './constants';
+  convertParsedGrupos, criarProgramaVazio,
+  ELETRODOS, getEletrodo, listaEletrodos, normalizeGrupos,
+  contatosParaTextoProntuario } from './constants';
 import { getDirLevel, dirUnitVector2D, calcAmpEfetiva, classifyStim } from './vectorHelpers';
 import { BlocoColapsavel, LoginModal, PatientSelector, ConfirmDialog } from './PatientComponents';
 import { RenderPrograma } from './ProgramComponents';
@@ -159,27 +161,10 @@ export default function App() {
   const [structuralMapL, setStructuralMapL] = useState(null);
   const [structuralMapR, setStructuralMapR] = useState(null);
   const [autoSaveStatus, setAutoSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
-  // Helper: cap programs to max 2 per side in any dadosGrupos object
-  const capPrograms = (grupos) => {
-    if (!grupos) return grupos;
-    try {
-      const safe = JSON.parse(JSON.stringify(grupos));
-      Object.values(safe).forEach((grupo, gi) => {
-        if (!grupo || typeof grupo !== 'object') {
-          // Replace null/non-object group with empty valid structure
-          const keys = Object.keys(safe);
-          safe[keys[gi]] = { L: [], R: [] };
-          return;
-        }
-        ['L','R'].forEach(lado => {
-          if (!Array.isArray(grupo[lado])) { grupo[lado] = []; return; }
-          if (grupo[lado].length > 2) grupo[lado] = grupo[lado].slice(0, 2);
-        });
-      });
-      return safe;
-    } catch(e) { console.error('capPrograms error:', e); return grupos; }
-  };
 
+  // NOTA: capPrograms foi substituído por normalizeGrupos (constants.js), que
+  // além de limitar a 2 programas por lado também ajusta as chaves de contato
+  // ao tipo de eletrodo da sessão.
 
   const [considerarAmplitude, setConsiderarAmplitude] = useState(false);
   const [blocosAbertos, setBlocosAbertos] = useState({
@@ -287,7 +272,7 @@ export default function App() {
           if (d.modoAmplitude) setModoAmplitude(d.modoAmplitude);
           if (d.dadosGrupos) {
             const tipoEl = d.tipoEletrodo || '4-ring';
-            setDadosGrupos(capPrograms(normalizeGrupos(d.dadosGrupos, tipoEl)) || d.dadosGrupos);
+            setDadosGrupos(normalizeGrupos(d.dadosGrupos, tipoEl));
           }
           if (d.clinica) setClinica(d.clinica);
           if (d.efeitosColaterais) setEfeitosColaterais(d.efeitosColaterais);
@@ -307,7 +292,11 @@ export default function App() {
           if (d.customDocs) setCustomDocs(d.customDocs);
           if (d.editingSessionId) setEditingSessionId(d.editingSessionId);
         }
-      } catch (err) {}
+      } catch (err) {
+        // Falhas aqui abortam a restauração inteira do rascunho — não devem ser silenciosas
+        console.error('Erro ao restaurar rascunho (temp_sessions):', err);
+        showToast('Não foi possível restaurar o rascunho salvo.');
+      }
     };
     fetchTemp();
   }, [user, activePatient]);
@@ -439,8 +428,7 @@ export default function App() {
 
   const gerarTextoProntuario = (grupos, eletrodo) => {
     let text = '';
-    const ordem = ORDEM_TEXTO_BAIXO_CIMA[eletrodo];
-    
+
     ['A', 'B', 'C', 'D'].forEach(g => {
       text += `Grupo ${g}:\n`;
       ['L', 'R'].forEach(lado => {
@@ -448,14 +436,7 @@ export default function App() {
         progs.forEach((prog, idx) => {
           const leadStr = lado === 'L' ? 'E' : 'D';
           const leadName = progs.length > 1 ? `Lead ${leadStr}${idx + 1}` : `Lead ${leadStr}`;
-          
-          const contactStr = ordem.map(c => {
-            const st = prog.contatos[c].state;
-            if (st === 'off') return '0';
-            const perc = prog.contatos[c].perc;
-            if (perc < 100) return `${st}(${perc}%)`;
-            return st;
-          }).join('');
+          const contactStr = contatosParaTextoProntuario(prog.contatos, eletrodo);
           if ((prog.amp || 0) > 0) {
             text += `${leadName} ${contactStr} ${prog.amp.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz\n`;
           }
@@ -484,6 +465,8 @@ export default function App() {
       `Data: ${hoje}`,
       `Paciente: ${activePatient?.nome || ''}`,
       `Registro HC: ${activePatient?.hc || ''}`,
+      '',
+      `Eletrodo: ${getEletrodo(tipoEletrodo).label}`,
       '',
       '--- EVOLUÇÃO ---',
       notasLivres || '(sem anotações)',
@@ -690,7 +673,8 @@ export default function App() {
         if (temSessoes) {
           for (const i of linhasIdx) {
             const cols = parseLine(_linhas[i]);
-            const tipoEl = get(cols, 'Eletrodo') || '4-ring';
+            const tipoElRaw = get(cols, 'Eletrodo') || '4-ring';
+            const tipoEl = ELETRODOS[tipoElRaw] ? tipoElRaw : '4-ring';
             const gruposKeys = ['A', 'B', 'C', 'D'];
             const dadosGruposImp = {};
             gruposKeys.forEach(g => {
@@ -722,16 +706,16 @@ export default function App() {
             const ecRStr = get(cols, 'EfeitosColateraisD');
             try {
               // Apply per-program cycling from compact string
-          const cyclingStr = get('Cycling') || '';
-          if (cyclingStr) {
-            cyclingStr.split(';').filter(Boolean).forEach(entry => {
-              const [g, leadIdx] = entry.split('/');
-              const side = leadIdx?.startsWith('E') ? 'L' : 'R';
-              const idx = leadIdx?.length > 1 ? parseInt(leadIdx.slice(1)) - 1 : 0;
-              if (dadosGruposImp[g]?.[side]?.[idx]) dadosGruposImp[g][side][idx].cycling = true;
-            });
-          }
-          await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'sessions'), {
+              const cyclingStr = get(cols, 'Cycling') || '';
+              if (cyclingStr) {
+                cyclingStr.split(';').filter(Boolean).forEach(entry => {
+                  const [g, leadIdx] = entry.split('/');
+                  const side = leadIdx?.startsWith('E') ? 'L' : 'R';
+                  const idx = leadIdx?.length > 1 ? parseInt(leadIdx.slice(1)) - 1 : 0;
+                  if (dadosGruposImp[g]?.[side]?.[idx]) dadosGruposImp[g][side][idx].cycling = true;
+                });
+              }
+              await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'sessions'), {
                 patientId: pacienteId,
                 timestamp: (() => {
                   const dataStr = get(cols, 'Data');
@@ -767,9 +751,6 @@ export default function App() {
       return temSessoes
         ? `${pacientesCriados} paciente(s) criado(s), ${sessoesImportadas} sessão(ões) importada(s).`
         : `${pacientesCriados} paciente(s) importado(s).`;
-      // Apply endereco from first session that has it
-      const firstEndereco = reviewed.find(r => r.endereco)?.endereco || '';
-      if (firstEndereco) setEnderecoSalvo(firstEndereco);
     } catch(err) {
       console.error(err);
       return 'Erro ao importar CSV.';
@@ -805,25 +786,20 @@ export default function App() {
           'EfeitosColateraisE', 'EfeitosColateraisD', 'NotasLivres'
         ];
         const linhas = sessDoPaciente.map(s => {
+          const tipoElSess = s.tipoEletrodo || '4-ring';
           const row = [
             paciente.nome || '',
             paciente.hc || '',
             formatarData(s.timestamp),
             (s.resumoSessao || '').replace(/[\n,]/g, ' '),
-            s.tipoEletrodo || '', s.voltagemBateria || '',
+            tipoElSess, s.voltagemBateria || '',
             s.impedanciaL || '', s.impedanciaR || '',
           ];
           gruposKeys.forEach(g => {
             [['L','E'],['R','D']].forEach(([l]) => {
               const prog = s.dadosGrupos?.[g]?.[l]?.[0];
               if (prog) {
-                const ordem = ORDEM_TEXTO_BAIXO_CIMA[s.tipoEletrodo || '4-ring'];
-                const contStr = ordem.map(c => {
-                  const st = prog.contatos?.[c]?.state || 'off';
-                  if (st === 'off') return '0';
-                  const perc = prog.contatos?.[c]?.perc;
-                  return perc && perc < 100 ? `${st}(${perc}%)` : st;
-                }).join('');
+                const contStr = contatosParaTextoProntuario(prog.contatos, tipoElSess);
                 row.push(contStr, prog.amp ?? '', prog.pw ?? '', prog.freq ?? '', prog.efeito || '');
               } else { row.push('', '', '', '', ''); }
             });
@@ -869,10 +845,6 @@ export default function App() {
       showToast('Erro ao apagar paciente.');
     }
   };
-
-  // Helper: convert extractor's parsed dadosGrupos (contatos as string "–-0+")
-  // to the app's format (contatos as object {0:{state:'-',perc:100},...})
-
 
   // Guard: salvar sobre registro antigo exige confirmação
   const handleSalvarComGuarda = (modoAtualizar) => {
@@ -947,10 +919,9 @@ export default function App() {
   // Create a fresh empty session
   const handleCriarSessaoVazia = async () => {
     if (!user || !activePatient) return;
-    const empty4ring = getContatosIniciais('4-ring');
-    const makeEmpty = () => ({ contatos: empty4ring, amp: 0, pw: 60, freq: 130, efeito: 'neutro' });
-    const emptyGrupos = { A:{L:[makeEmpty()],R:[makeEmpty()]}, B:{L:[makeEmpty()],R:[makeEmpty()]},
-                          C:{L:[makeEmpty()],R:[makeEmpty()]}, D:{L:[makeEmpty()],R:[makeEmpty()]} };
+    // Cada programa recebe seu PRÓPRIO objeto de contatos — antes todos
+    // compartilhavam a mesma referência e se alteravam juntos.
+    const emptyGrupos = normalizeGrupos(null, '4-ring');
     const sessionData = {
       patientId: activePatient.id, timestamp: Date.now(), type: 'active',
       tipoEletrodo: '4-ring', modoAmplitude: 'mA',
@@ -965,7 +936,7 @@ export default function App() {
     try {
       const docRef = await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'sessions'), sessionData);
       // Reset UI to empty state
-      setTipoEletrodo('4-ring'); setDadosGrupos(emptyGrupos);
+      setTipoEletrodo('4-ring'); setDadosGrupos(normalizeGrupos(null, '4-ring'));
       setClinica({ tremor:0, rigidez:0, bradicinesia:0 }); setEfeitosColaterais({ L:[], R:[] });
       setNotasLivres(''); setResumoSessao(''); setVoltagemBateria('');
       setImpedanciaL(''); setImpedanciaR('');
@@ -998,8 +969,9 @@ export default function App() {
   };
 
   const loadSession = (sess) => {
-    setTipoEletrodo(sess.tipoEletrodo || '4-ring');
-    try { setDadosGrupos(capPrograms(sess.dadosGrupos) || sess.dadosGrupos); }
+    const tipoEl = sess.tipoEletrodo || '4-ring';
+    setTipoEletrodo(tipoEl);
+    try { setDadosGrupos(normalizeGrupos(sess.dadosGrupos, tipoEl)); }
     catch(e) { console.error('Erro ao carregar grupos:', e); showToast('Erro ao carregar programação da sessão'); }
     setClinica(sess.clinica || { tremor: 0, rigidez: 0, bradicinesia: 0 });
     setEfeitosColaterais(sess.efeitosColaterais || { L: [], R: [] });
@@ -1028,8 +1000,10 @@ export default function App() {
   });
 
   const aplicarEstado = (s) => {
-    setTipoEletrodo(s.tipoEletrodo || '4-ring');
-    try { setDadosGrupos(capPrograms(normalizeGrupos(s.dadosGrupos, s.tipoEletrodo||'4-ring')) || s.dadosGrupos); } catch(e){}
+    const tipoEl = s.tipoEletrodo || '4-ring';
+    setTipoEletrodo(tipoEl);
+    try { setDadosGrupos(normalizeGrupos(s.dadosGrupos, tipoEl)); }
+    catch(e) { console.error('Erro ao aplicar estado:', e); }
     setModoAmplitude(s.modoAmplitude || 'mA');
     setDispositivoInfo(s.dispositivoInfo || { fabricante:'', modeloIPG:'', modeloEletrodoE:'', modeloEletrodoD:'', alvoAnatomicoE:'', alvoAnatomicoD:'', dataImplante:'', dataTrocaIPG:'' });
     setClinica(s.clinica || { tremor:0, rigidez:0, bradicinesia:0 });
@@ -1069,8 +1043,9 @@ export default function App() {
   const handleCopiarUltimaSessao = () => {
     const ultimaAtiva = sessions.find(s => s.type === 'active');
     if (ultimaAtiva) {
-      setTipoEletrodo(ultimaAtiva.tipoEletrodo || '4-ring');
-      try { setDadosGrupos(capPrograms(ultimaAtiva.dadosGrupos) || ultimaAtiva.dadosGrupos); }
+      const tipoEl = ultimaAtiva.tipoEletrodo || '4-ring';
+      setTipoEletrodo(tipoEl);
+      try { setDadosGrupos(normalizeGrupos(ultimaAtiva.dadosGrupos, tipoEl)); }
       catch(e) { console.error('Erro ao carregar ultima sessao:', e); }
       setClinica(ultimaAtiva.clinica || { tremor: 0, rigidez: 0, bradicinesia: 0 });
       setEfeitosColaterais(ultimaAtiva.efeitosColaterais || { L: [], R: [] });
@@ -1125,14 +1100,7 @@ export default function App() {
     const isColateral = !['tremor','rigidez','bradicinesia'].includes(tipo);
     if (isColateral) {
       const leadStr = lado === 'L' ? 'E' : 'D';
-      // Gerar string de contatos
-      const ordem = ORDEM_TEXTO_BAIXO_CIMA[tipoEletrodo];
-      const contactStr = ordem.map(c => {
-        const st = prog.contatos[c]?.state || 'off';
-        if (st === 'off') return '0';
-        const perc = prog.contatos[c].perc;
-        return perc < 100 ? `${st}(${perc}%)` : st;
-      }).join('');
+      const contactStr = contatosParaTextoProntuario(prog.contatos, tipoEletrodo);
       const linha = `[Lead ${leadStr} ${contactStr} ${prog.amp.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz — ${tipo}]`;
       setNotasLivres(prev => (prev ? prev + '\n' : '') + linha);
     }
@@ -1170,21 +1138,16 @@ export default function App() {
   const handleEfeitoGrupo = async (grupo, efeito, textoEfeito) => {
     if (!user || !activePatient || !sessaoReferencia) return;
     const ultima = sessaoReferencia;
+    const tipoElRef = ultima.tipoEletrodo || '4-ring';
 
     // Gerar texto da programação do grupo (E e D)
-    const ordem = ORDEM_TEXTO_BAIXO_CIMA[ultima.tipoEletrodo || '4-ring'];
     let progTexto = '';
     ['L','R'].forEach(lado => {
       const leadStr = lado === 'L' ? 'E' : 'D';
       (ultima.dadosGrupos?.[grupo]?.[lado] || []).forEach((prog, idx) => {
         const progs = ultima.dadosGrupos[grupo][lado];
         const leadName = progs.length > 1 ? `Lead ${leadStr}${idx+1}` : `Lead ${leadStr}`;
-        const contactStr = ordem.map(c => {
-          const st = prog.contatos?.[c]?.state || 'off';
-          if (st === 'off') return '0';
-          const perc = prog.contatos[c].perc;
-          return perc < 100 ? `${st}(${perc}%)` : st;
-        }).join('');
+        const contactStr = contatosParaTextoProntuario(prog.contatos, tipoElRef);
         progTexto += `${leadName} ${contactStr} ${prog.amp?.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz
 `;
       });
@@ -1304,16 +1267,10 @@ ${progTexto}Avaliação: ${textoEfeito}
 
     const linhas = ativas.map(s => {
       const tipoEl = s.tipoEletrodo || '4-ring';
-      const ordem = ORDEM_TEXTO_BAIXO_CIMA[tipoEl];
       const contatosToCSV = (prog) => {
         if (!prog) return '';
         if (typeof prog.contatos === 'string') return prog.contatos;
-        return ordem.map(c => {
-          const st = prog.contatos?.[c]?.state || 'off';
-          if (st === 'off') return '0';
-          const perc = prog.contatos?.[c]?.perc;
-          return perc && perc < 100 ? `${st}(${perc}%)` : st;
-        }).join('');
+        return contatosParaTextoProntuario(prog.contatos, tipoEl);
       };
       const row = [
         activePatient?.nome || '',
@@ -1390,7 +1347,8 @@ ${progTexto}Avaliação: ${textoEfeito}
     for (let i = 1; i < linhas.length; i++) {
       const cols = parseCsv(linhas[i]);
       const get = (nome) => { const idx = cabeçalho.indexOf(nome); return idx >= 0 ? cols[idx] || '' : ''; };
-      const tipoEl = get('Eletrodo') || '4-ring';
+      const tipoElRaw = get('Eletrodo') || '4-ring';
+      const tipoEl = ELETRODOS[tipoElRaw] ? tipoElRaw : '4-ring';
       const gruposKeys = ['A', 'B', 'C', 'D'];
       const dadosGruposImp = {};
       const parseContStr = (contStr, tipoEl2) => {
@@ -1483,10 +1441,14 @@ ${progTexto}Avaliação: ${textoEfeito}
 
   const handleMudarTipoEletrodo = (e) => {
     const novoTipo = e.target.value;
+    const anterior = tipoEletrodo;
+    if (novoTipo === anterior) return;
     setTipoEletrodo(novoTipo);
-    const reset = {};
-    ['A', 'B', 'C', 'D'].forEach(g => { reset[g] = { L: [criarProgramaInicial(novoTipo)], R: [criarProgramaInicial(novoTipo)] }; });
-    setDadosGrupos(reset);
+    // Preserva os contatos cuja chave existe nos dois eletrodos; os demais voltam a 'off'
+    setDadosGrupos(prev => normalizeGrupos(prev, novoTipo));
+    const chavesNovas = getEletrodo(novoTipo).ordemBaixoCima;
+    const perdeu = getEletrodo(anterior).ordemBaixoCima.some(k => !chavesNovas.includes(k));
+    if (perdeu) showToast('Eletrodo alterado — contatos sem equivalente foram zerados.');
   };
 
   const setProgsAtual = (lado, novoValorOuFuncao) => {
@@ -1511,7 +1473,8 @@ ${progTexto}Avaliação: ${textoEfeito}
   const atualizarContatoState = (lado, index, chaveContato, novoEstado) => {
     setProgsAtual(lado, prev => {
       const novo = [...prev];
-      novo[index].contatos = { ...novo[index].contatos, [chaveContato]: { state: novoEstado, perc: novoEstado === 'off' ? 100 : novo[index].contatos[chaveContato].perc } };
+      const atual = novo[index].contatos?.[chaveContato] || { state: 'off', perc: 100 };
+      novo[index] = { ...novo[index], contatos: { ...novo[index].contatos, [chaveContato]: { state: novoEstado, perc: novoEstado === 'off' ? 100 : atual.perc } } };
       return novo;
     });
   };
@@ -1519,7 +1482,8 @@ ${progTexto}Avaliação: ${textoEfeito}
   const atualizarContatoPerc = (lado, index, chaveContato, novaPerc) => {
     setProgsAtual(lado, prev => {
       const novo = [...prev];
-      novo[index].contatos = { ...novo[index].contatos, [chaveContato]: { ...novo[index].contatos[chaveContato], perc: novaPerc } };
+      const atual = novo[index].contatos?.[chaveContato] || { state: 'off', perc: 100 };
+      novo[index] = { ...novo[index], contatos: { ...novo[index].contatos, [chaveContato]: { ...atual, perc: novaPerc } } };
       return novo;
     });
   };
@@ -1590,9 +1554,11 @@ ${progTexto}Avaliação: ${textoEfeito}
           <div className="flex items-center bg-slate-800 rounded px-2 py-1.5 hidden md:flex">
             <span className="text-[10px] uppercase tracking-wider text-slate-400 mr-2">Eletrodo:</span>
             <select value={tipoEletrodo} onChange={handleMudarTipoEletrodo} className="bg-white text-slate-900 font-bold text-sm focus:outline-none cursor-pointer rounded px-1 py-0.5">
-              <option value="4-ring">4 Contatos</option>
-              <option value="8-ring">8 Contatos</option>
-              <option value="directional">Direcional</option>
+              {listaEletrodos().map(el => (
+                <option key={el.id} value={el.id} title={el.descricao}>
+                  {el.label} · {el.nContatos} contatos
+                </option>
+              ))}
             </select>
           </div>
           
@@ -1800,7 +1766,7 @@ ${progTexto}Avaliação: ${textoEfeito}
             </p>
           ) : (() => {
             const ultima = sessaoReferencia;
-            const ordem = ORDEM_TEXTO_BAIXO_CIMA[ultima?.tipoEletrodo || '4-ring'];
+            const tipoElRef = ultima?.tipoEletrodo || '4-ring';
             const grupoA = ultima.dadosGrupos?.['A'] || {};
 
             // Helper: compare prog config+amp+pw+freq against group A for a given side
@@ -1829,12 +1795,7 @@ ${progTexto}Avaliação: ${textoEfeito}
                     (ultima.dadosGrupos?.[grupo]?.[lado] || []).forEach((prog, idx) => {
                       const progs = ultima.dadosGrupos[grupo][lado];
                       const leadName = progs.length > 1 ? `Lead ${leadStr}${idx+1}` : `Lead ${leadStr}`;
-                      const contactStr = ordem.map(c => {
-                        const st = prog.contatos?.[c]?.state || 'off';
-                        if (st === 'off') return '0';
-                        const perc = prog.contatos[c].perc;
-                        return perc < 100 ? `${st}(${perc}%)` : st;
-                      }).join('');
+                      const contactStr = contatosParaTextoProntuario(prog.contatos, tipoElRef);
                       const label = igual ? `${leadName} ${contactStr} ${prog.amp?.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz  [= Grupo A]`
                                           : `${leadName} ${contactStr} ${prog.amp?.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz`;
                       linhasGrupo.push(label);
@@ -2445,10 +2406,12 @@ ${progTexto}Avaliação: ${textoEfeito}
         const minAtras = recente ? Math.round((Date.now() - recente.timestamp) / 60000) : 0;
         const abrirRecente = () => {
           if (!recente) return;
+          const tipoEl = recente.tipoEletrodo || '4-ring';
           setEditingSessionId(recente.id);
-          setTipoEletrodo(recente.tipoEletrodo || '4-ring');
+          setTipoEletrodo(tipoEl);
           setModoAmplitude(recente.modoAmplitude || 'mA');
-          try { setDadosGrupos(capPrograms(normalizeGrupos(recente.dadosGrupos, recente.tipoEletrodo||'4-ring')) || recente.dadosGrupos); } catch(e){}
+          try { setDadosGrupos(normalizeGrupos(recente.dadosGrupos, tipoEl)); }
+          catch(e) { console.error('Erro ao abrir sessão recente:', e); }
           setClinica(recente.clinica || { tremor:0, rigidez:0, bradicinesia:0 });
           setEfeitosColaterais(recente.efeitosColaterais || { L:[], R:[] });
           setNotasLivres(recente.notasLivres || '');
@@ -2497,15 +2460,15 @@ ${progTexto}Avaliação: ${textoEfeito}
       {showHistoricoText && (() => {
         const sessionsAtivas = sessions.filter(s => s.type === 'active')
           .sort((a, b) => b.timestamp - a.timestamp);
-        const ordem = ORDEM_TEXTO_BAIXO_CIMA[tipoEletrodo];
         const linhas = sessionsAtivas.map(sess => {
           const data = formatarData(sess.timestamp);
           const grupos = sess.dadosGrupos || {};
-          const ord = ORDEM_TEXTO_BAIXO_CIMA[sess.tipoEletrodo || '4-ring'];
+          const tipoElSess = sess.tipoEletrodo || '4-ring';
 
           // Header line: date + resumo
           let txt = `${'─'.repeat(50)}\n📅 ${data}`;
           if (sess.resumoSessao) txt += ` — ${sess.resumoSessao}`;
+          txt += `  ·  ${getEletrodo(tipoElSess).label}`;
           txt += '\n';
 
           // Groups with programming + efeito annotation
@@ -2529,12 +2492,7 @@ ${progTexto}Avaliação: ${textoEfeito}
               (grupo[lado] || []).forEach((prog, idx) => {
                 const progs = grupo[lado];
                 const leadName = progs.length > 1 ? `  Lead ${leadStr}${idx+1}` : `  Lead ${leadStr}`;
-                const contactStr = ord.map(c => {
-                  const st = prog.contatos?.[c]?.state || 'off';
-                  if (st === 'off') return '0';
-                  const perc = prog.contatos[c]?.perc;
-                  return perc < 100 ? `${st}(${perc}%)` : st;
-                }).join('');
+                const contactStr = contatosParaTextoProntuario(prog.contatos, tipoElSess);
                 txt += `${leadName}: ${contactStr}  ${prog.amp?.toFixed(1)}mA  ${prog.pw}µs  ${prog.freq}Hz\n`;
               });
             });
@@ -2690,17 +2648,18 @@ ${progTexto}Avaliação: ${textoEfeito}
                   if (!isNaN(parsed.getTime())) ts = parsed.getTime();
                 }
               }
+              const tipoElRow = row.tipoEletrodo || '4-ring';
               await addDoc(
                 collection(db, `artifacts/${appId}/users/${user.uid}/sessions`),
                 {
                   patientId: paciente.id,
                   timestamp: ts,
-                  dadosGrupos: convertParsedGrupos(row.parsed, row.tipoEletrodo),
-                  tipoEletrodo: row.tipoEletrodo || '4-ring',
+                  dadosGrupos: normalizeGrupos(convertParsedGrupos(row.parsed, tipoElRow), tipoElRow),
+                  tipoEletrodo: tipoElRow,
                   resumoSessao: '',
                   notasLivres: row.evolution || '',
                   tendenciasEstimulacao: row.tendencias || '',
-                  clinica: '',
+                  clinica: { tremor: 0, rigidez: 0, bradicinesia: 0 },
                   type: 'active',
                   importadoViaExtrator: true,
                   voltagemBateria: row.voltagemBateria || '',

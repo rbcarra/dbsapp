@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { TIPOS_ELETRODO, MARCADOR_LETRAS, getStringConfig } from './constants';
+import { getEletrodo, MARCADOR_LETRAS, getStringConfig } from './constants';
 import { classifyStim, getDirLevel, parseConfigToContatos } from './vectorHelpers';
 import { ControleParametro } from './DisplayComponents';
 
@@ -7,14 +7,26 @@ const VisualizadorEletrodo = ({ lado, tipoEletrodo, contatos, onChangeState, onC
   const [editandoMICC, setEditandoMICC] = useState(null);
   const timerRef = useRef(null);
 
+  const el = getEletrodo(tipoEletrodo);
+  const layout = el.layout;                 // linhas de cima (proximal) p/ baixo (distal)
+  const denso = el.nContatos > 8;           // Cartesia X / HX
+
+  // Dimensões adaptativas — eletrodos de 4 e 8 contatos ficam idênticos ao antes
+  const dim = denso
+    ? { btnH: 'h-7',  seg: 'w-8',  gapX: 'space-x-1', gapY: 'space-y-1', txt: 'text-[10px]', perc: 'text-[8px]' }
+    : { btnH: 'h-10', seg: 'w-10', gapX: 'space-x-2', gapY: 'space-y-2', txt: 'text-xs',     perc: 'text-[9px]' };
+
+  // O anel ocupa a largura de um nível direcional inteiro, para parecer um anel
+  const anelW = el.temDirecional ? (denso ? 'w-[104px]' : 'w-[136px]') : 'w-16';
+
   const cores = {
     'off': 'bg-slate-200 border-slate-300 text-slate-500 hover:bg-slate-300',
     '-': 'bg-cyan-500 border-cyan-600 text-white shadow-cyan-200 shadow-md',
     '+': 'bg-rose-500 border-rose-600 text-white shadow-rose-200 shadow-md'
   };
 
-  const hasCathode = Object.values(contatos).some(c => c.state === '-');
-  const hasAnode = Object.values(contatos).some(c => c.state === '+');
+  const hasCathode = Object.values(contatos || {}).some(c => c?.state === '-');
+  const hasAnode   = Object.values(contatos || {}).some(c => c?.state === '+');
   let caseState = 'off';
   if (hasCathode && !hasAnode) caseState = '+';
   else if (hasAnode && !hasCathode) caseState = '-';
@@ -25,12 +37,10 @@ const VisualizadorEletrodo = ({ lado, tipoEletrodo, contatos, onChangeState, onC
     '+': 'bg-rose-500 border-rose-600 text-white shadow-rose-200 shadow-md opacity-90'
   };
 
-  const layout = TIPOS_ELETRODO[tipoEletrodo];
-
   const handlePointerDown = (chave, e) => {
-    if (e.pointerType === 'mouse' && e.button !== 0) return; 
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     timerRef.current = setTimeout(() => {
-      if (contatos[chave].state !== 'off') setEditandoMICC(chave);
+      if (contatos?.[chave]?.state !== 'off') setEditandoMICC(chave);
     }, 500);
   };
 
@@ -39,7 +49,7 @@ const VisualizadorEletrodo = ({ lado, tipoEletrodo, contatos, onChangeState, onC
       clearTimeout(timerRef.current);
       timerRef.current = null;
       if (editandoMICC !== chave) {
-        const estadoAtual = contatos[chave].state;
+        const estadoAtual = contatos?.[chave]?.state || 'off';
         const proximoEstado = estadoAtual === 'off' ? '-' : estadoAtual === '-' ? '+' : 'off';
         onChangeState(chave, proximoEstado);
       }
@@ -48,13 +58,14 @@ const VisualizadorEletrodo = ({ lado, tipoEletrodo, contatos, onChangeState, onC
 
   return (
     <div className="flex flex-col items-center p-4 bg-slate-50 rounded-xl border border-slate-200 w-full relative">
-      <h3 className="text-xs font-bold text-slate-500 mb-4 uppercase tracking-wider">
+      <h3 className="text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider">
         Hemisfério {lado === 'L' ? 'Esq.' : 'Dir.'}
       </h3>
-      
+      <p className="text-[9px] text-slate-400 mb-3" title={el.descricao}>{el.label}</p>
+
       <div className="flex items-center justify-center w-full relative">
         <div className="absolute left-2 top-1/2 -translate-y-1/2 flex flex-col items-center">
-          <div 
+          <div
             className={`w-10 h-16 rounded-xl border-2 flex items-center justify-center font-bold text-[10px] tracking-wide uppercase select-none transition-colors duration-300 ${caseCores[caseState]}`}
             title="Case (IPG)"
           >
@@ -64,31 +75,31 @@ const VisualizadorEletrodo = ({ lado, tipoEletrodo, contatos, onChangeState, onC
 
         <div className="flex flex-col items-center relative z-10">
           <div className="w-2 h-8 bg-slate-300 rounded-t-full mb-1"></div>
-          <div className="flex flex-col space-y-2 z-10 relative">
+          <div className={`flex flex-col ${dim.gapY} z-10 relative`}>
             {layout.map((linha, rowIndex) => (
-              <div key={rowIndex} className="flex justify-center space-x-2 relative">
+              <div key={rowIndex} className={`flex justify-center ${dim.gapX} relative`}>
                 {linha.map(chave => {
-                  const contato = contatos[chave];
+                  const contato = contatos?.[chave] || { state: 'off', perc: 100 };
                   const label = `${lado}${chave}`;
-                  const widthClass = linha.length > 1 ? 'w-10' : 'w-16';
+                  const widthClass = linha.length > 1 ? dim.seg : anelW;
 
                   return (
                     <div key={chave} className="relative">
                       <button
                         onPointerDown={(e) => handlePointerDown(chave, e)}
                         onPointerUp={() => handlePointerUp(chave)}
-                        onPointerLeave={() => { if(timerRef.current) clearTimeout(timerRef.current); }}
+                        onPointerLeave={() => { if (timerRef.current) clearTimeout(timerRef.current); }}
                         onContextMenu={(e) => { e.preventDefault(); handlePointerDown(chave, e); setEditandoMICC(chave); }}
-                        className={`${widthClass} h-10 rounded-lg border-2 flex flex-col items-center justify-center font-bold text-xs transition-transform select-none ${cores[contato.state]}`}
+                        className={`${widthClass} ${dim.btnH} rounded-lg border-2 flex flex-col items-center justify-center font-bold ${dim.txt} transition-transform select-none ${cores[contato.state]}`}
                       >
                         <span>{label}</span>
                         {contato.state !== 'off' && contato.perc < 100 && (
-                          <span className="text-[9px] opacity-90 leading-tight">{contato.perc}%</span>
+                          <span className={`${dim.perc} opacity-90 leading-tight`}>{contato.perc}%</span>
                         )}
                       </button>
 
                       {editandoMICC === chave && (
-                        <div 
+                        <div
                           className="absolute top-0 left-full ml-2 w-36 bg-white border border-slate-300 shadow-2xl rounded-lg p-3 z-50"
                           onPointerDown={(e) => e.stopPropagation()}
                         >
@@ -150,8 +161,8 @@ const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, m
       <div className={`p-4 flex gap-4 flex-1 ${isInterleaving ? 'flex-col' : 'flex-row items-start'}`}>
         {/* Electrode visualizer */}
         <div className={isInterleaving ? "w-full flex justify-center" : "flex flex-col items-center gap-3 shrink-0"}>
-          <VisualizadorEletrodo 
-            lado={lado} tipoEletrodo={tipoEletrodo} contatos={programa.contatos} 
+          <VisualizadorEletrodo
+            lado={lado} tipoEletrodo={tipoEletrodo} contatos={programa.contatos}
             onChangeState={(k, s) => onUpdateState(lado, index, k, s)}
             onChangePerc={(k, p) => onUpdatePerc(lado, index, k, p)}
           />
@@ -181,9 +192,9 @@ const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, m
         )}
 
         <div className="w-full flex flex-col justify-center flex-1">
-          <ControleParametro 
-            label="Amplitude" valor={programa.amp} unidade={modoAmplitude || "mA"} step={0.1} min={0} max={modoAmplitude==="V" ? 12 : 8}
-            onChange={(v) => onUpdateProg(lado, index, 'amp', v)} isAmplitude={true} historicoRef={historicoRef} marcadores={marcadores} marcadoresRing={marcadoresRing} marcadoresTodosL={marcadoresTodosL} historicoTodos={historicoTodos} structuralMap={structuralMap} tipoEletrodo={tipoEletrodo} modoAmplitude={modoAmplitude} impedanciaL={impedanciaL} impedanciaR={impedanciaR} lado={lado} programaContatos={programa.contatos} sessaoAtualTimestamp={historicoRef.current?.[0]?.timestamp || Date.now()}
+          <ControleParametro
+            label="Amplitude" valor={programa.amp} unidade={modoAmplitude || "mA"} step={0.1} min={0} max={modoAmplitude === "V" ? 12 : 8}
+            onChange={(v) => onUpdateProg(lado, index, 'amp', v)} isAmplitude={true} historicoRef={historicoRef} marcadores={marcadores} marcadoresRing={marcadoresRing} marcadoresTodosL={marcadoresTodosL} historicoTodos={historicoTodos} structuralMap={structuralMap} tipoEletrodo={tipoEletrodo} modoAmplitude={modoAmplitude} impedanciaL={impedanciaL} impedanciaR={impedanciaR} lado={lado} programaContatos={programa.contatos} sessaoAtualTimestamp={(Array.isArray(historicoRef) ? historicoRef[0]?.date : undefined) || Date.now()}
           />
           <div className="flex flex-col mt-2">
             <ControleParametro label="Pulso" valor={programa.pw} unidade="µs" step={10} min={30} max={210} onChange={(v) => onUpdateProg(lado, index, 'pw', v)}/>

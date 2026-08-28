@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
-import { ORDEM_TEXTO_BAIXO_CIMA, getContatosIniciais, EFEITO_OPTS, convertParsedGrupos } from './constants';
+import { ORDEM_TEXTO_BAIXO_CIMA, getContatosIniciais, EFEITO_OPTS, convertParsedGrupos,
+         ELETRODOS, getEletrodo, listaEletrodos } from './constants';
 import { ProgrammingEditor } from './ProgrammingEditor';
 import { extrairProntuario, getAIConfig, checkHealth } from './aiClient';
 
@@ -52,7 +53,7 @@ const getParam = (seg, unitPatterns) => {
 
 // Longest run of 0/+/- -- Correção 3: ignorar 5º símbolo (case marker)
 // ─── POSITIONAL PERCENT CONTACT PARSER ──────────────────────────────────────
-// Handles the extended positional notation where each position (0,1,2,3) is either:
+// Handles the extended positional notation where each position is either:
 //   0           → off
 //   -           → cathode 100%
 //   +           → anode 100%
@@ -64,11 +65,14 @@ const getParam = (seg, unitPatterns) => {
 //   "-(30%)0-(70%)0"       → contact0: cathode 30%, contact2: cathode 70%
 //   "-(20%)-(20%)-(20%)-(30%)" → contacts 0-2: cathode 20% each, contact3: cathode 30%
 //
-// Fully compatible with standard notation: "--0+" still handled by extractContacts
+// As posições são mapeadas na ordem baixo→cima do eletrodo informado, então a
+// notação funciona para 4, 8 ou 16 contatos.
 
-const parsePositionalPercentContacts = (seg) => {
+const parsePositionalPercentContacts = (seg, tipoEl = '4-ring') => {
   // Only activate if the segment contains at least one parenthesised percentage
   if (!(/[+\-]\(\d+%?\)/.test(seg))) return null;
+
+  const ordem = getEletrodo(tipoEl).ordemBaixoCima;
 
   // Strip everything after the first amplitude/param marker to isolate contact portion
   const contactPart = seg
@@ -83,17 +87,18 @@ const parsePositionalPercentContacts = (seg) => {
     tokens.push(m[1]);
   }
 
-  // Must have 2–4 tokens and at least one parens token
-  if (tokens.length < 2 || tokens.length > 4) return null;
+  // A notação posicional só é interpretável se houver um token por contato.
+  // O caso legado de 4 anéis aceita 2–4 tokens (formato histórico do parser).
+  const casaExato  = tokens.length === ordem.length;
+  const casaLegado = ordem.length === 4 && tokens.length >= 2 && tokens.length <= 4;
+  if (!casaExato && !casaLegado) return null;
   if (!tokens.some(t => /\(/.test(t))) return null;
 
-  // Build contact object: ring keys '0','1','2','3'
-  const contatos = {};
-  ['0','1','2','3'].forEach(k => { contatos[k] = { state: 'off', perc: 100 }; });
+  const contatos = getContatosIniciais(tipoEl);
 
   tokens.forEach((tok, i) => {
-    if (i > 3) return;
-    const key = String(i);
+    const key = ordem[i];
+    if (key === undefined) return;
     if (tok === '0') return; // off — stays default
     const percMatch = tok.match(/([+\-])\((\d+)%?\)/);
     if (percMatch) {
@@ -121,7 +126,7 @@ const parseSide = (s) =>
   /^(e|l|esq|left|esquerdo|1$)/i.test((s||'').trim()) ? 'L' : 'R';
 
 // Correção 2: fallback sem unidade — menor entre 40-180 = pw, maior = freq
-const parseParams = (seg) => {
+const parseParams = (seg, tipoEl = '4-ring') => {
   const amp  = getParam(seg, ['m[aA]', '[Vv](?![Hh][Zz])(?![a-zA-Z])']) ?? 0;
   const pw   = getParam(seg, ['pw(?![a-zA-Z])', '(?<![a-zA-Z])μs', '(?<![a-zA-Z])us(?![a-zA-Z])', 'µs', '(?<![a-zA-Z])ms(?![a-zA-Z])']);
   const freq = getParam(seg, ['[Hh]z(?![a-zA-Z])', '\\bfreq(?:u[eê]ncia)?\\b', '\\bfr\\b']);
@@ -166,7 +171,7 @@ const parseParams = (seg) => {
   }
 
   // Try positional percent format first (e.g. "0-(30%)-(70%)0"), fall back to standard
-  const contatosResult = parsePositionalPercentContacts(seg) || extractContacts(seg);
+  const contatosResult = parsePositionalPercentContacts(seg, tipoEl) || extractContacts(seg);
   return { contatos: contatosResult, amp, pw: resolvedPw, freq: resolvedFreq, impedancia };
 };
 
@@ -179,7 +184,7 @@ const extractBatteryImpedance = (fullText) => {
   // Battery: "bateria 2.9v", "bateria: 2,9V", "bat 3.1 v", "IPG 2.9V"
   let bateria = null;
   const batMatch = fullText.match(
-    /(?:bateria|batter[yi]|bat|ipg)\s*[:\-]?\s*([0-9]+[.,][0-9]+|[0-9]+)\s*[Vv]/i
+    /(?:bateria|batter[yi]|bat|ipg)\s*[:\-]?\s*([0-9]+[.,][0-9]+|[0-9]+)\s*[Vv]/i
   );
   if (batMatch) bateria = parseFloat(batMatch[1].replace(',', '.'));
 
@@ -238,6 +243,10 @@ const extractBatteryImpedance = (fullText) => {
 //   "R3+R4 50/50 3,0 60 ms 130 hz"
 //   "R4 20% + R3 A50% + B30% 2,6 60 ms 130 hz"
 //   "R4 12% + R3 A70% + B18% +R3c -5% 2,4 80 ms 130 hz"
+//
+// Convenção: em "[LR]N", N é o NÍVEL (1-based, de distal para proximal) e a
+// letra opcional é o segmento direcional. Isso vale igualmente para eletrodos
+// de 4, 8 e 16 contatos — o limite superior vem do registro de eletrodos.
 
 // Step 1: separate the contact spec from amp/pw/freq values
 const splitContactsFromParams = (line) => {
@@ -288,11 +297,15 @@ const parseNamedContactLine = (line, tipoEl = '4-ring') => {
   const { contactSpec, amp, pw, freq } = splitContactsFromParams(clean);
   if (!amp && !pw && !freq) return null;
 
-  const isDirEl = tipoEl === 'directional';
-  const ringKeys = ['0','1','2','3'];
-  const dirKeys  = ['0','1','2','3','1A','1B','1C','2A','2B','2C','3A','3B','3C'];
-  const contatos = {};
-  (isDirEl ? dirKeys : ringKeys).forEach(k => { contatos[k] = { state: 'off', perc: 100 }; });
+  const el = getEletrodo(tipoEl);
+  const maxLv = el.nNiveis - 1;
+  // Nível citado explicitamente e fora do alcance do eletrodo é DESCARTADO, não
+  // grudado no último nível: inventar um contato que não existe é pior do que o
+  // parser detectar menos grupos e sinalizar "⚠ preencha abaixo".
+  const lvValido = (n) => Number.isInteger(n) && n >= 0 && n <= maxLv;
+  // clampLv só para níveis DERIVADOS (ex: o vizinho lv+1 numa notação dividida)
+  const clampLv = (n) => Math.max(0, Math.min(maxLv, n));
+  const contatos = getContatosIniciais(tipoEl);
 
   // Detect anode-default mode: explicit "-N%" = cathode, everything else = anode
   const anodeDefault = /[\s+]-\d+%/.test(contactSpec);
@@ -308,9 +321,9 @@ const parseNamedContactLine = (line, tipoEl = '4-ring') => {
   // Handles: "L3 30% L4 70%", "2- 30% 3- 70%", "R3 30% R4 70%"
   const normalizedSpec = contactSpec
     // "L3 30% L4 70%" → "L3 30% + L4 70%"  (named contacts, L/R required in lookahead)
-    .replace(/([LRlr]\d(?:[ABCabc])?(?:\s+\d+%)?)\s+(?=[LRlr]\d)/g, m => m.trimEnd() + ' + ')
+    .replace(/([LRlr]\d{1,2}(?:[ABCabc])?(?:\s+\d+%)?)\s+(?=[LRlr]\d)/g, m => m.trimEnd() + ' + ')
     // "2- 30% 3- 70%" → "2- 30% + 3- 70%"  (direct index contacts)
-    .replace(/(\d+[\-+](?:\s+\d+%)?)\s+(?=\d+[\-+])/g, m => m.trimEnd() + ' + ');
+    .replace(/(\d{1,2}[\-+](?:\s+\d+%)?)\s+(?=\d{1,2}[\-+])/g, m => m.trimEnd() + ' + ');
   const segments = normalizedSpec.split(/\s*\+\s*/);
   let lastLvIdx = 0;
 
@@ -318,15 +331,17 @@ const parseNamedContactLine = (line, tipoEl = '4-ring') => {
     const segTrim = seg.trim();
     if (!segTrim) continue;
 
-    // Full contact ref: [LR]N [letter]? [perc]%
-    // e.g. "R4 12%", "R3 A70%", "R3c -5%", "R3+R4" (handled via outer split)
-    const fullRe = /^([+\-]?\s*[LRlr])(\d)\s*([ABCabc])?\s*([\-]?\d+)?\s*%?$/;
+    // Full contact ref: [LR]N [letter]? [perc]%   →   N é o NÍVEL (1-based)
+    // e.g. "R4 12%", "R3 A70%", "R3c -5%", "L14 A50%"
+    const fullRe = /^([+\-]?\s*[LRlr])(\d{1,2})\s*([ABCabc])?\s*([\-]?\d+)?\s*%?$/;
     const fullM = segTrim.match(fullRe);
 
     if (fullM) {
       const signPfx = (fullM[1] || '').replace(/\s/g,'').replace(/[LRlr]$/,'');
       const isAnode = signPfx === '+';
-      lastLvIdx = Math.max(0, Math.min(3, parseInt(fullM[2]) - 1));
+      const lvFull = parseInt(fullM[2]) - 1;
+      if (!lvValido(lvFull)) continue;   // nível não existe neste eletrodo
+      lastLvIdx = lvFull;
       const letter = fullM[3] ? fullM[3].toUpperCase() : null;
       const percStr = fullM[4];
       const perc = percStr !== undefined && percStr !== null ? parseInt(percStr) : null;
@@ -352,19 +367,22 @@ const parseNamedContactLine = (line, tipoEl = '4-ring') => {
       continue;
     }
     // "[LR]N N/N" inline split (e.g. "R4 50/50") — adds a new ref with split perc
-    const refSplit = segTrim.match(/^([+\-]?\s*[LRlr])(\d)\s+(\d+)\/(\d+)$/);
+    const refSplit = segTrim.match(/^([+\-]?\s*[LRlr])(\d{1,2})\s+(\d+)\/(\d+)$/);
     if (refSplit) {
       const signPfx2 = (refSplit[1]||'').replace(/\s/g,'').replace(/[LRlr]$/,'');
-      lastLvIdx = Math.max(0, Math.min(3, parseInt(refSplit[2]) - 1));
+      const lvSplit = parseInt(refSplit[2]) - 1;
+      if (!lvValido(lvSplit)) continue;
+      lastLvIdx = lvSplit;
       if (refs.length > 0) refs[refs.length-1].perc = parseInt(refSplit[3]);
       refs.push({ lvIdx: lastLvIdx, letter: null, perc: parseInt(refSplit[4]), isAnode: signPfx2 === '+' });
       continue;
     }
 
     // DIRECT INDEX FORMAT: "2- 30%", "3+ 70%", "0- 50%" (bare digit + sign + optional perc)
-    const directIdx = segTrim.match(/^(\d+)([\-+])\s*(\d+)?%?$/);
+    const directIdx = segTrim.match(/^(\d{1,2})([\-+])\s*(\d+)?%?$/);
     if (directIdx) {
-      const lvIdx = Math.max(0, Math.min(3, parseInt(directIdx[1])));
+      const lvIdx = parseInt(directIdx[1]);
+      if (!lvValido(lvIdx)) continue;
       const isAnode = directIdx[2] === '+';
       const perc = directIdx[3] ? parseInt(directIdx[3]) : null;
       refs.push({ lvIdx, letter: null, perc, isAnode });
@@ -378,14 +396,15 @@ const parseNamedContactLine = (line, tipoEl = '4-ring') => {
     const parensSplit = segTrim.match(/^(\d)(\d)[-\s]*\((\d+)%\)[-\s]*\((\d+)%\)$/)
       || segTrim.match(/^(\d)[-\s]*\((\d+)%\)(\d)?[-\s]*\((\d+)%\)$/);
     if (parensSplit) {
-      let lv1 = Math.max(0, Math.min(3, parseInt(parensSplit[1])));
+      let lv1 = parseInt(parensSplit[1]);
+      if (!lvValido(lv1)) continue;
       const p1  = parseInt(parensSplit[2]);
-      let lv2 = parensSplit[3] !== undefined ? Math.max(0, Math.min(3, parseInt(parensSplit[3]))) : lv1 + 1;
+      let lv2 = parensSplit[3] !== undefined ? clampLv(parseInt(parensSplit[3])) : clampLv(lv1 + 1);
       const p2  = parseInt(parensSplit[4]);
-      // Special case: "00" → contacts 2 and 3 (programmer interface notation for this device)
-      if (lv1 === 0 && lv2 === 0) { lv1 = 2; lv2 = 3; }
+      // Caso especial do programador 4-ring: "00" → contatos 2 e 3
+      if (lv1 === 0 && lv2 === 0 && !el.temDirecional && el.nNiveis >= 4) { lv1 = 2; lv2 = 3; }
       // General: if same contact twice, make them adjacent
-      else if (lv1 === lv2) { lv2 = Math.min(3, lv1 + 1); }
+      else if (lv1 === lv2) { lv2 = clampLv(lv1 + 1); }
       refs.push({ lvIdx: lv1, letter: null, perc: p1, isAnode: false });
       refs.push({ lvIdx: lv2, letter: null, perc: p2, isAnode: false });
       lastLvIdx = lv2;
@@ -395,21 +414,40 @@ const parseNamedContactLine = (line, tipoEl = '4-ring') => {
 
   if (refs.length === 0) return null;
   const noPerc = refs.every(r => r.perc === null);
+  let aplicados = 0;
 
   refs.forEach((ref) => {
-    let pct = ref.perc !== null ? Math.abs(ref.perc) : (noPerc ? Math.round(100 / refs.length) : 100);
+    const pct = ref.perc !== null ? Math.abs(ref.perc) : (noPerc ? Math.round(100 / refs.length) : 100);
     const state = anodeDefault
       ? ((ref.perc !== null && ref.perc < 0) ? '-' : '+')
       : (ref.isAnode ? '+' : '-');
 
-    if (isDirEl && ref.letter) {
-      const key = `${ref.lvIdx}${ref.letter}`;
-      if (contatos[key] !== undefined) contatos[key] = { state, perc: pct };
-    } else if (!ref.letter) {
+    const nivel = el.niveis[ref.lvIdx];
+    if (!nivel) return;
+
+    if (nivel.tipo === 'dir') {
+      if (ref.letter) {
+        const key = `${ref.lvIdx}${ref.letter}`;
+        if (contatos[key] !== undefined) { contatos[key] = { state, perc: pct }; aplicados++; }
+      } else {
+        // Nível direcional citado sem letra → divide igualmente pelos 3 segmentos
+        const share = Math.round(pct / 3);
+        nivel.contatos.forEach((key, i) => {
+          contatos[key] = { state, perc: i === 0 ? pct - 2 * share : share };
+        });
+        aplicados++;
+      }
+    } else {
+      // Nível anelar: se veio com letra de segmento, a notação não corresponde a
+      // este eletrodo — descarta em vez de fingir que o segmento é o anel
+      if (ref.letter) return;
       const key = String(ref.lvIdx);
-      if (contatos[key] !== undefined) contatos[key] = { state, perc: pct };
+      if (contatos[key] !== undefined) { contatos[key] = { state, perc: pct }; aplicados++; }
     }
   });
+
+  // Nenhuma referência coube neste eletrodo → falha visível em vez de programa vazio
+  if (aplicados === 0) return null;
 
   return { contatos, amp, pw, freq, side };
 };
@@ -474,20 +512,20 @@ const parseProgramming = (rawText, tipoEletrodo = '4-ring') => {
     // "Lead 1 (E): ..." ou "Lead 2 (D): ..."
     const m1 = line.match(/lead\s+(?:\d+\s+)?\(([^)]+)\)\s*[:](.*)/i);
     if (m1) {
-      if (!isImpedanceOnlyLine(m1[2]||line)) push(currentGroup, parseSide(m1[1]), parseParams(m1[2]||line));
+      if (!isImpedanceOnlyLine(m1[2]||line)) push(currentGroup, parseSide(m1[1]), parseParams(m1[2]||line, tipoEletrodo));
       continue;
     }
 
     // "Lead E: ...", "Lead D1: ...", "Lead 1: ...", "Lead 2: ..."
     const m2 = line.match(/lead\s*\(?([EDLRedlr12]\d*)\)?\s*[:/ ](.*)/i);
     if (m2) {
-      if (!isImpedanceOnlyLine(m2[2]||line)) push(currentGroup, parseSide(m2[1]), parseParams(m2[2]||line));
+      if (!isImpedanceOnlyLine(m2[2]||line)) push(currentGroup, parseSide(m2[1]), parseParams(m2[2]||line, tipoEletrodo));
       continue;
     }
 
     // Interleaving: "(E2): ...", "(D1): ..."
     const m3 = line.match(/^\(([EDLRedlr]\d*)\)\s*[:](.*)/i);
-    if (m3) { push(currentGroup, parseSide(m3[1]), parseParams(m3[2]||line)); continue; }
+    if (m3) { push(currentGroup, parseSide(m3[1]), parseParams(m3[2]||line, tipoEletrodo)); continue; }
 
     // Guard helper: line must contain an amplitude-like value to be treated as programming
     const hasAmpInLine = (s) =>
@@ -520,13 +558,13 @@ const parseProgramming = (rawText, tipoEletrodo = '4-ring') => {
           continue;
         }
       }
-      push(currentGroup, side, parseParams(rest)); continue;
+      push(currentGroup, side, parseParams(rest, tipoEletrodo)); continue;
     }
 
     // "E 0-00 2,8mA..." ou "D: 0-00 ..." sem palavra "Lead"
     const m4 = line.match(/^([EDed])\s*[:.\s]\s*(.*)/);
     if (m4 && !/^(eletrodo|desc|esq|dir)/i.test(line)) {
-      push(currentGroup, parseSide(m4[1]), parseParams(m4[2]||line)); continue;
+      push(currentGroup, parseSide(m4[1]), parseParams(m4[2]||line, tipoEletrodo)); continue;
     }
 
     // Named-contact format: "L4 2,0 mA 50ms 130hz", "R3+R4 50/50 3,0 ...", etc.
@@ -549,7 +587,7 @@ const POSITIVE_EFFECTS = ['bradicinesia','rigidez','tremor'];
 // Effect keyword → DBS Log tipo mapping
 // Key = regex pattern (case insensitive), value = tipo
 const EFFECT_PATTERNS = [
-  [/c[aá]psula|cap|capsula/i,          'Cápsula'],
+  [/c[aá]psula|cap|capsula/i,          'Cápsula'],
   [/parestesia|paresthesia/i,             'Parestesia'],
   [/disartria|dysarthria/i,               'Disartria'],
   [/bradicinesia|bradykinesia/i,          'bradicinesia'],
@@ -561,19 +599,21 @@ const EFFECT_PATTERNS = [
   [/calor|frio|formigamento|sensação|sens[ao]/i,                                             'Outros'],
 ];
 
-// Map high contact numbers (8-15) to electrode contacts (0-7 → subtract 8 for right)
-// Assumes: left uses 0-7, right uses 8-15 (or 0-3 and 8-11 for 4-contact)
-const mapContactNum = (numStr) => {
+// Numeração contínua entre hemisférios: contatos acima do total do eletrodo
+// pertencem ao lado oposto. O limite vem do eletrodo, não de um "8" fixo —
+// com 16 contatos por lead, os contatos 9-16 continuam sendo do mesmo lado.
+const mapContactNum = (numStr, tipoEl = '4-ring') => {
   const n = parseInt(numStr);
   if (isNaN(n)) return null;
-  // High numbers: map to local electrode contact
-  if (n >= 8) return { local: String(n - 8), inferredSide: 'R' };
+  const porLado = getEletrodo(tipoEl).nContatos;
+  if (n >= porLado) return { local: String(n - porLado), inferredSide: 'R' };
   return { local: String(n), inferredSide: 'L' };
 };
 
-const parseThresholdText = (text, ladoDefault, pw = 60, freq = 130) => {
+const parseThresholdText = (text, ladoDefault, pw = 60, freq = 130, tipoEl = '4-ring') => {
   if (!text || !text.trim()) return [];
   const markers = [];
+  const porLado = getEletrodo(tipoEl).nContatos;
 
   // Split on "//" or newline, then process section by section for left/right
   // First detect if text has "Esquerdo:" / "Direito:" section markers
@@ -581,17 +621,18 @@ const parseThresholdText = (text, ladoDefault, pw = 60, freq = 130) => {
   const allLines = normalized.split(/\n/).map(l => l.trim()).filter(Boolean);
 
   let currentSide = ladoDefault || 'L'; // track which side we're parsing
+  let sideExplicit = false;             // vira true quando um cabeçalho de lado aparece
 
   for (const line of allLines) {
     // Side section headers: "Esquerdo:", "Direito:", "Hemisfério E:", etc.
     // After detecting side, continue processing the REMAINDER of the same line
     let lineToProcess = line;
     if (/^(esquerdo|hemisf[eé]rio\s*e|hsq?e?\b|lado\s*e)/i.test(line)) {
-      currentSide = 'L';
+      currentSide = 'L'; sideExplicit = true;
       lineToProcess = line.replace(/^(esquerdo|hemisf[eé]rio\s*e|lado\s*e)[\s:]+/i, '').trim();
       if (!lineToProcess) continue;
     } else if (/^(direito|hemisf[eé]rio\s*d|hsd?\b|lado\s*d)/i.test(line)) {
-      currentSide = 'R';
+      currentSide = 'R'; sideExplicit = true;
       lineToProcess = line.replace(/^(direito|hemisf[eé]rio\s*d|lado\s*d)[\s:]+/i, '').trim();
       if (!lineToProcess) continue;
     }
@@ -613,11 +654,11 @@ const parseThresholdText = (text, ladoDefault, pw = 60, freq = 130) => {
       // Directional contact like "1A"
       contactStr = rawContact.toUpperCase();
     } else {
-      const mapped = mapContactNum(rawContact);
+      const mapped = mapContactNum(rawContact, tipoEl);
       if (!mapped) continue;
       contactStr = mapped.local;
-      // If high number detected, override current side
-      if (parseInt(rawContact) >= 8) side = mapped.inferredSide;
+      // Só infere o lado por numeração alta quando não houve cabeçalho explícito
+      if (!sideExplicit && parseInt(rawContact) >= porLado) side = mapped.inferredSide;
     }
 
     // ── Find amplitude in this line (V or mA, comma or dot) ──
@@ -665,8 +706,8 @@ const parseThresholdText = (text, ladoDefault, pw = 60, freq = 130) => {
 };
 
 // Split combined threshold text into L and R markers
-const parseThresholdBothSides = (text, pw = 60, freq = 130) => {
-  const all = parseThresholdText(text, 'L', pw, freq);
+const parseThresholdBothSides = (text, pw = 60, freq = 130, tipoEl = '4-ring') => {
+  const all = parseThresholdText(text, 'L', pw, freq, tipoEl);
   const L = all.filter(m => m.lado === 'L');
   const R = all.filter(m => m.lado === 'R');
   return { L, R };
@@ -707,7 +748,7 @@ const buildCSVString = (rows) => {
   rows.forEach(r => {
     const parsed = r.parsed || {};
     const row = [];
-    row.push(r.nome, r.hc, r.date, r.NotasLivres || '', '4-ring','','','','Não','Não');
+    row.push(r.nome, r.hc, r.date, r.NotasLivres || '', r.tipoEletrodo || '4-ring','','','','Não','Não');
     CSV_GKS.forEach(g => {
       CSV_SIDES.forEach(([, s]) => {
         const progs = parsed[g] && parsed[g][s];
@@ -738,7 +779,7 @@ const exportCSV = (rows) => {
 };
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
-const TIPOS_ELETRODO_EXTRATOR = ['4-ring', '8-ring', 'directional'];
+const TIPOS_ELETRODO_EXTRATOR = Object.keys(ELETRODOS);
 
 // Convert contatos to display string regardless of format (string or object)
 const contatosToStr = (contatos) => {
@@ -775,9 +816,9 @@ const StepDot = ({label,active,done}) => (
 );
 
 // ─── PARSE PREVIEW ────────────────────────────────────────────────────────
-const ParsePreview = ({rawText, onUpdate}) => {
+const ParsePreview = ({rawText, onUpdate, tipoEletrodo = '4-ring'}) => {
   const [localRaw, setLocalRaw] = useState(rawText);
-  const parsed = useMemo(() => parseProgramming(localRaw, '4-ring'), [localRaw]);
+  const parsed = useMemo(() => parseProgramming(localRaw, tipoEletrodo), [localRaw, tipoEletrodo]);
   const groups = Object.keys(parsed).sort();
 
   useEffect(() => { onUpdate(localRaw, parsed); }, [localRaw]);
@@ -824,9 +865,9 @@ const ParsePreview = ({rawText, onUpdate}) => {
 
 // ─── MANUAL PROG EDITOR ──────────────────────────────────────────────────
 // Shown when parse detects no leads — lets user fix the text and retry
-const ManualProgEditor = ({ rawText, onSave }) => {
+const ManualProgEditor = ({ rawText, onSave, tipoEletrodo = '4-ring' }) => {
   const [val, setVal] = React.useState(rawText || '');
-  const parsed = useMemo(() => parseProgramming(val, '4-ring'), [val]);
+  const parsed = useMemo(() => parseProgramming(val, tipoEletrodo), [val, tipoEletrodo]);
   const groups = Object.keys(parsed).sort();
 
   return (
@@ -858,7 +899,7 @@ const ManualProgEditor = ({ rawText, onSave }) => {
         <p className="text-[10px] text-rose-400 italic">Ainda sem leads detectados — verifique o formato</p>
       ) : null}
       <p className="text-[9px] text-slate-600 leading-tight">
-        Formatos aceitos: "Grupo A / Lead 1 (E): 00-0 / 2,3V / pw 60 / 130Hz" · "Lead D: 0-00 / 1,4mA / 90ms / 180Hz"
+        Formatos aceitos: "Grupo A / Lead 1 (E): 00-0 / 2,3V / pw 60 / 130Hz" · "Lead D: 0-00 / 1,4mA / 90ms / 180Hz" · "L5 A50% + B50% 2,4mA 60µs 130Hz"
       </p>
     </div>
   );
@@ -930,6 +971,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
   const currentConsultText = consultations[consultIdx]?.text || '';
   const currentField = FIELDS[fieldIdx];
   const capturedForConsult = captured[consultIdx] || {};
+  const tipoElAtual = capturedForConsult.tipoEletrodo || tipoEletrodoGlobal;
   const allFieldsDone = FIELDS.every(f => capturedForConsult[f] !== undefined);
   const thresholdLDone = capturedForConsult['thresholdL'] !== undefined;
   const thresholdRDone = capturedForConsult['thresholdR'] !== undefined;
@@ -1083,12 +1125,12 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
         const hasCombined = /esquerdo|direito/i.test(threshLText);
         let marcadoresL, marcadoresR;
         if (hasCombined) {
-          const both = parseThresholdBothSides(threshLText, pw0, freq0);
+          const both = parseThresholdBothSides(threshLText, pw0, freq0, tipoEl);
           marcadoresL = both.L;
-          marcadoresR = both.R.concat(parseThresholdText(threshRText, 'R', pw0, freq0));
+          marcadoresR = both.R.concat(parseThresholdText(threshRText, 'R', pw0, freq0, tipoEl));
         } else {
-          marcadoresL = parseThresholdText(threshLText, 'L', pw0, freq0);
-          marcadoresR = parseThresholdText(threshRText, 'R', pw0, freq0);
+          marcadoresL = parseThresholdText(threshLText, 'L', pw0, freq0, tipoEl);
+          marcadoresR = parseThresholdText(threshRText, 'R', pw0, freq0, tipoEl);
         }
         // Extract battery and impedance from evolution + programming text
         const fullBlock = [d.date||'', d.evolution||'', d.programming||''].join(' ');
@@ -1437,7 +1479,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                           role: 'user',
                           content: [
                             { type: 'image', source: { type: 'base64', media_type: mediaType, data: b64 } },
-                            { type: 'text', text: `Esta é uma tela de programadora de DBS. Extraia a configuração de estimulação de cada área/lead visível e retorne APENAS o texto no formato abaixo, sem explicações adicionais:\n\nGrupo A:\nLead E: [contatos] [amplitude] mA / pw [pw] / [freq] Hz\nLead D: [contatos] [amplitude] mA / pw [pw] / [freq] Hz\n\nSe houver múltiplos programas ou áreas, use Grupo B, C etc. Para eletrodos direcionais, use o formato de porcentagem dos contatos (ex: 3A+33% 3B+33% 3C+34%). Contatos cátodo são indicados com - e ânodo com +. Se houver interleaving, adicione uma linha (E2) ou (D2).` }
+                            { type: 'text', text: `Esta é uma tela de programadora de DBS. Extraia a configuração de estimulação de cada área/lead visível e retorne APENAS o texto no formato abaixo, sem explicações adicionais:\n\nGrupo A:\nLead E: [contatos] [amplitude] mA / pw [pw] / [freq] Hz\nLead D: [contatos] [amplitude] mA / pw [pw] / [freq] Hz\n\nSe houver múltiplos programas ou áreas, use Grupo B, C etc. Para eletrodos direcionais, use o formato de nível + segmento (ex: L3 A33% + B33% + C34%), onde o número é o NÍVEL contado do contato distal (1 = mais distal). Contatos cátodo são indicados com - e ânodo com +. Se houver interleaving, adicione uma linha (E2) ou (D2).` }
                           ]
                         }]
                       })
@@ -1494,13 +1536,13 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
 
             {/* ProgrammingEditor — always visible, pre-filled from parser, directly editable */}
             {capturedForConsult.programming !== undefined && (() => {
-              const rawParsed = parseProgramming(capturedForConsult.programming || '', tipoEletrodoGlobal);
-              const parsedConverted = convertParsedGrupos(rawParsed, tipoEletrodoGlobal);
+              const rawParsed = parseProgramming(capturedForConsult.programming || '', tipoElAtual);
+              const parsedConverted = convertParsedGrupos(rawParsed, tipoElAtual);
               const current = captured[consultIdx]?.editedGrupos || parsedConverted;
               const parseDetected = Object.keys(rawParsed).length > 0;
               const prevCapt = captured[consultIdx - 1];
               const prevGrupos = prevCapt?.editedGrupos
-                || (prevCapt?.programming ? convertParsedGrupos(parseProgramming(prevCapt.programming || '', tipoEletrodoGlobal), tipoEletrodoGlobal) : null);
+                || (prevCapt?.programming ? convertParsedGrupos(parseProgramming(prevCapt.programming || '', tipoElAtual), tipoElAtual) : null);
               return (
                 <div className="p-4 border-b border-slate-800">
                   <div className="flex items-center gap-2 mb-3">
@@ -1521,7 +1563,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                       const resolved = typeof newG === 'function' ? newG(current) : newG;
                       setCaptured(prev => ({...prev, [consultIdx]: {...(prev[consultIdx]||{}), editedGrupos: resolved}}));
                     }}
-                    tipoEletrodo={tipoEletrodoGlobal}
+                    tipoEletrodo={tipoElAtual}
                     sessaoAnteriorGrupos={prevGrupos}
                   />
                 </div>
@@ -1530,7 +1572,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
 
             {/* Programming parse result (editable) */}
             {capturedForConsult.programming !== undefined && capturedForConsult.programming !== '' && (() => {
-              const parsed = parseProgramming(capturedForConsult.programming);
+              const parsed = parseProgramming(capturedForConsult.programming, tipoElAtual);
               const groups = Object.keys(parsed).sort();
               return (
                 <div className="p-4 border-b border-slate-800">
@@ -1554,7 +1596,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
 
             {/* Editor manual de programação quando parse não detectou nada */}
             {capturedForConsult.programming !== undefined && (() => {
-              const parsed = parseProgramming(capturedForConsult.programming);
+              const parsed = parseProgramming(capturedForConsult.programming, tipoElAtual);
               const groups = Object.keys(parsed);
               const nenhum = groups.length === 0;
               if (!nenhum) return null;
@@ -1567,6 +1609,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                   </div>
                   <ManualProgEditor
                     rawText={capturedForConsult.programming}
+                    tipoEletrodo={tipoElAtual}
                     onSave={(newRaw) => {
                       setCaptured(prev => ({
                         ...prev,
@@ -1587,7 +1630,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                 </div>
               );
               const prevCapt = captured[prevIdx] || {};
-              const parsedAnterior = parseProgramming(prevCapt.programming || '');
+              const parsedAnterior = parseProgramming(prevCapt.programming || '', prevCapt.tipoEletrodo || tipoEletrodoGlobal);
               const grupos = Object.keys(parsedAnterior).sort();
               const efGrupos = prevCapt.efeitosGrupos || {};
               const setEfeitoGrupo = (g, val) => setCaptured(prev => ({
@@ -1617,7 +1660,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                               onClick={()=>setEfeitoGrupo(g, o.val)}
                               className={`px-2 py-0.5 rounded text-[9px] font-bold transition-all border ${
                                 (efGrupos[g]||'neutro')===o.val
-                                  ? o.cls+' border-transparent shadow-sm'
+                                  ? efeitoExtCls(o.val)+' border-transparent shadow-sm'
                                   : 'bg-slate-800 border-slate-700 text-slate-500 hover:border-slate-500'
                               }`}>
                               {o.label}
@@ -1634,22 +1677,28 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
             {/* Tipo de eletrodo + threshold + Próxima / Concluir */}
             <div className="p-4 flex flex-col gap-3">
               {/* Tipo de eletrodo */}
-              <div className="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">Eletrodo:</span>
-                {TIPOS_ELETRODO_EXTRATOR.map(t => (
-                  <button key={t}
-                    onClick={() => {
-                      setTipoEletrodoGlobal(t);
-                      setCaptured(prev => ({...prev, [consultIdx]: {...(prev[consultIdx]||{}), tipoEletrodo: t}}));
-                    }}
-                    className={`px-2.5 py-0.5 rounded text-[10px] font-bold border transition-all ${
-                      (capturedForConsult.tipoEletrodo || tipoEletrodoGlobal) === t
-                        ? 'bg-indigo-600 border-indigo-400 text-white'
-                        : 'bg-slate-700 border-slate-600 text-slate-400 hover:border-slate-400'
-                    }`}>
-                    {t}
-                  </button>
-                ))}
+              <div className="flex items-start gap-2 bg-slate-800/60 rounded-lg px-3 py-2 flex-wrap">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0 pt-0.5">Eletrodo:</span>
+                <div className="flex gap-1 flex-wrap">
+                  {TIPOS_ELETRODO_EXTRATOR.map(t => {
+                    const el = getEletrodo(t);
+                    return (
+                      <button key={t}
+                        title={el.descricao}
+                        onClick={() => {
+                          setTipoEletrodoGlobal(t);
+                          setCaptured(prev => ({...prev, [consultIdx]: {...(prev[consultIdx]||{}), tipoEletrodo: t}}));
+                        }}
+                        className={`px-2.5 py-0.5 rounded text-[10px] font-bold border transition-all ${
+                          tipoElAtual === t
+                            ? 'bg-indigo-600 border-indigo-400 text-white'
+                            : 'bg-slate-700 border-slate-600 text-slate-400 hover:border-slate-400'
+                        }`}>
+                        {el.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
               {/* Threshold input — select+capture OR direct textarea */}
               <div className="flex flex-col gap-1.5">
@@ -1725,6 +1774,10 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
               <div>
                 <p className="font-bold text-amber-300 mb-1">📅 Divisão por data</p>
                 <p>Cada consulta é separada pela data de cabeçalho (ex: <code className="bg-slate-700 px-1 rounded">15/03/2022</code> ou <code className="bg-slate-700 px-1 rounded">Retorno 11/06/2021</code>). Você pode adicionar ou remover divisões manualmente na etapa seguinte.</p>
+              </div>
+              <div>
+                <p className="font-bold text-amber-300 mb-1">🔌 Escolha do eletrodo</p>
+                <p>Marque o eletrodo <strong className="text-white">antes</strong> de conferir o parse: ele define quantos níveis existem e como os contatos são nomeados. Em <code className="bg-slate-700 px-1 rounded">L3 A70%</code>, o número é o <strong className="text-white">nível</strong> contado do contato distal (1 = mais distal) e a letra é o segmento direcional.</p>
               </div>
               <div>
                 <p className="font-bold text-amber-300 mb-1">⚡ Extração da programação</p>
@@ -1821,9 +1874,10 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                           <div key={`${g}${side}${pi}`} className="flex flex-col gap-0.5 bg-slate-800/60 rounded p-1.5 border border-emerald-800/30">
                             <div className="flex items-center gap-1 mb-0.5">
                               <span className="text-[9px] font-black text-emerald-500">Gr.{g}</span>
-                              <input value={contatosToStr(p.contatos)} onChange={e=>updateParsedProg(ri,g,side,pi,'contatos',e.target.value)}
-                                className="bg-slate-700 border border-slate-600 rounded px-1 py-0 font-mono text-emerald-300 w-16 text-[11px] focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                title="Contatos" />
+                              <span className="bg-slate-700/60 border border-slate-600 rounded px-1 py-0 font-mono text-emerald-300 text-[10px] truncate max-w-[180px]"
+                                title={contatosToStr(p.contatos)}>
+                                {contatosToStr(p.contatos)}
+                              </span>
                             </div>
                             <div className="flex gap-1">
                               <div className="flex items-center gap-0.5">
@@ -1859,7 +1913,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                         <select value={r.tipoEletrodo || '4-ring'}
                           onChange={e => updateReviewed(ri, 'tipoEletrodo', e.target.value)}
                           className="bg-slate-800 border border-slate-600 rounded px-1.5 py-1 text-slate-300 text-[10px] focus:outline-none focus:ring-1 focus:ring-indigo-500">
-                          {TIPOS_ELETRODO_EXTRATOR.map(t => <option key={t} value={t}>{t}</option>)}
+                          {listaEletrodos().map(el => <option key={el.id} value={el.id}>{el.label}</option>)}
                         </select>
                       </td>
                       {/* Battery */}
@@ -1911,7 +1965,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
                                 <button key={o.val}
                                   onClick={()=>setReviewed(prev=>prev.map((row,i)=>i!==ri?row:{...row,efeitosGrupos:{...(row.efeitosGrupos||{}),[g]:o.val}}))}
                                   className={`px-1.5 py-0.5 rounded text-[8px] font-bold transition-all ${
-                                    ((r.efeitosGrupos||{})[g]||'neutro')===o.val?o.cls:'bg-slate-800 border border-slate-700 text-slate-500 hover:border-slate-500'
+                                    ((r.efeitosGrupos||{})[g]||'neutro')===o.val?efeitoExtCls(o.val):'bg-slate-800 border border-slate-700 text-slate-500 hover:border-slate-500'
                                   }`}>
                                   {o.label}
                                 </button>
@@ -1943,7 +1997,7 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
           )}
           <div className="shrink-0 flex items-center justify-between text-[10px] text-slate-500 border-t border-slate-800 pt-2">
             <span>{reviewed.filter(r=>Object.keys(r.parsed||{}).length>0).length}/{reviewed.length} com programação detectada</span>
-            <span>Contatos no formato do app (ex: 0-00, 0-+0) · mA / µs / Hz editáveis</span>
+            <span>Contatos somente leitura aqui · edite na etapa de Extração · mA / µs / Hz editáveis</span>
           </div>
         </div>
       )}
