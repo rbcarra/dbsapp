@@ -536,11 +536,10 @@ export default function App() {
       '--- EVOLUÇÃO ---',
       notasLivres || '(sem anotações)',
       '',
-      '--- PROGRAMAÇÃO ATUAL ---',
+      '--- PROGRAMAÇÃO REGISTRADA EM PRONTUÁRIO ONLINE: ---',
       voltagemBateria ? `Voltagem da bateria: ${voltagemBateria} V` : '',
       impedanciaL ? `Impedância Esquerdo: ${impedanciaL}` : '',
       impedanciaR ? `Impedância Direito: ${impedanciaR}` : '',
-      `Cycling: ${cyclingStr}`,
       '',
       programacaoTexto,
     ].filter(l => l !== undefined).join('\n').replace(/\n{3,}/g, '\n\n').trim();
