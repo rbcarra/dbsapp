@@ -164,6 +164,45 @@ export default function App() {
   const [structuralMapL, setStructuralMapL] = useState(null);
   const [structuralMapR, setStructuralMapR] = useState(null);
   const [autoSaveStatus, setAutoSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
+  // Helper: garante que dadosGrupos tenha SEMPRE as 4 chaves A/B/C/D, cada uma com
+  // arrays L e R válidos, e cada programa com contatos válidos. Corrige sessões
+  // antigas/parciais salvas com grupos faltando (evita crash "reading 'L'").
+  const normalizeGrupos = (grupos, tipoEl = '4-ring') => {
+    const base = {};
+    ['A','B','C','D'].forEach(g => {
+      const gd = grupos && grupos[g];
+      const fixSide = (arr) => {
+        if (!Array.isArray(arr) || arr.length === 0) return [criarProgramaInicial(tipoEl)];
+        return arr.map(p => {
+          if (!p || typeof p !== 'object') return criarProgramaInicial(tipoEl);
+          // garante contatos como objeto válido
+          let contatos = p.contatos;
+          if (!contatos || typeof contatos !== 'object' || Array.isArray(contatos)) {
+            contatos = getContatosIniciais(tipoEl);
+          }
+          const num = (v, def) => {
+            const n = typeof v === 'number' ? v : parseFloat(String(v).replace(',', '.'));
+            return isNaN(n) ? def : n;
+          };
+          return {
+            contatos,
+            amp: num(p.amp, 0),
+            pw: num(p.pw, 60),
+            freq: num(p.freq, 130),
+            efeito: p.efeito || 'neutro',
+            efeitoTexto: p.efeitoTexto,
+            cycling: !!p.cycling,
+          };
+        });
+      };
+      base[g] = {
+        L: fixSide(gd && gd.L),
+        R: fixSide(gd && gd.R),
+      };
+    });
+    return base;
+  };
+
   // Helper: cap programs to max 2 per side in any dadosGrupos object
   const capPrograms = (grupos) => {
     if (!grupos) return grupos;
@@ -1008,7 +1047,7 @@ export default function App() {
 
   const loadSession = (sess) => {
     setTipoEletrodo(sess.tipoEletrodo || '4-ring');
-    try { setDadosGrupos(capPrograms(sess.dadosGrupos) || sess.dadosGrupos); }
+    try { setDadosGrupos(capPrograms(normalizeGrupos(sess.dadosGrupos, sess.tipoEletrodo || '4-ring')) || sess.dadosGrupos); }
     catch(e) { console.error('Erro ao carregar grupos:', e); showToast('Erro ao carregar programação da sessão'); }
     setClinica(sess.clinica || { tremor: 0, rigidez: 0, bradicinesia: 0 });
     setEfeitosColaterais(sess.efeitosColaterais || { L: [], R: [] });
@@ -1335,17 +1374,6 @@ export default function App() {
         tipoEl,
         s.voltagemBateria || '',
         s.impedanciaL || '', s.impedanciaR || '',
-        (() => {
-          const entries = [];
-          Object.entries(s.dadosGrupos || {}).forEach(([g, grupo]) => {
-            ['L','R'].forEach(side => {
-              (grupo[side] || []).forEach((p, idx) => {
-                if (p.cycling) entries.push(`${g}/${side==='L'?'E':'D'}${(grupo[side].length>1)?idx+1:''}`);
-              });
-            });
-          });
-          return entries.join(';');
-        })(),
         s.clinica?.tremor ?? '', s.clinica?.rigidez ?? '', s.clinica?.bradicinesia ?? '',
       ];
       gruposKeys.forEach(g => {
@@ -1428,7 +1456,8 @@ export default function App() {
           const p0 = parseInt(get(`Grupo${g}_Lead${ladoNome}_PW(us)`)) || 60;
           const f0 = parseInt(get(`Grupo${g}_Lead${ladoNome}_Freq(Hz)`)) || 130;
           const e0 = get(`Grupo${g}_Lead${ladoNome}_Efeito`) || 'neutro';
-          dadosGruposImp[g][l].push({ contatos: parseContStr(c0, tipoEl), amp:a0, pw:p0, freq:f0, efeito:e0 });
+          const cyc0 = get(`Grupo${g}_Lead${ladoNome}_Cycling`) === 'Sim';
+          dadosGruposImp[g][l].push({ contatos: parseContStr(c0, tipoEl), amp:a0, pw:p0, freq:f0, efeito:e0, cycling:cyc0 });
           // Program 1 (interleaving — only if amp > 0)
           const a1 = parseFloat(get(`Grupo${g}_Lead${ladoNome}2_Amp(mA)`)) || 0;
           if (a1 > 0) {
@@ -1436,7 +1465,8 @@ export default function App() {
             const p1 = parseInt(get(`Grupo${g}_Lead${ladoNome}2_PW(us)`)) || 60;
             const f1 = parseInt(get(`Grupo${g}_Lead${ladoNome}2_Freq(Hz)`)) || 130;
             const e1 = get(`Grupo${g}_Lead${ladoNome}2_Efeito`) || 'neutro';
-            dadosGruposImp[g][l].push({ contatos: parseContStr(c1, tipoEl), amp:a1, pw:p1, freq:f1, efeito:e1 });
+            const cyc1 = get(`Grupo${g}_Lead${ladoNome}2_Cycling`) === 'Sim';
+            dadosGruposImp[g][l].push({ contatos: parseContStr(c1, tipoEl), amp:a1, pw:p1, freq:f1, efeito:e1, cycling:cyc1 });
           }
         });
       });
@@ -1555,8 +1585,8 @@ export default function App() {
     );
   }
 
-  const programasL = dadosGrupos[grupoAtivo].L;
-  const programasR = dadosGrupos[grupoAtivo].R;
+  const programasL = dadosGrupos[grupoAtivo]?.L || [];
+  const programasR = dadosGrupos[grupoAtivo]?.R || [];
   const displayedSessions = sessions.filter(s => showDeletedSessions ? true : (s.type !== 'deleted' && s.type !== 'inactive_backup'));
 
   return (
