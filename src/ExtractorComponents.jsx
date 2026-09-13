@@ -1134,9 +1134,23 @@ const ExtractorModal = ({ onClose, onImportarPaciente, pacienteInicial = null })
   // Auto-detect date lines when text is ready
   const autoDetectDates = useCallback((text) => {
     const ls = text.split('\n');
-    const found = new Set([0]);
-    ls.forEach((line, i) => { if (i > 0 && isDateLine(line)) found.add(i); });
-    setBoundaries(found);
+    const raw = new Set([0]);
+    ls.forEach((line, i) => { if (i > 0 && isDateLine(line)) raw.add(i); });
+
+    // Filtro: se um bloco entre dois limites tem < 10 linhas não-vazias, remove o
+    // limite SUPERIOR (mantém a data mais abaixo). Evita que uma data solta no fim
+    // de uma consulta seja interpretada como nova consulta.
+    const sorted = [...raw].sort((a, b) => a - b);
+    const keep = new Set([0]);
+    for (let k = 0; k < sorted.length; k++) {
+      const start = sorted[k];
+      const end = sorted[k + 1] ?? ls.length;
+      const nonEmpty = ls.slice(start, end).filter(l => l.trim()).length;
+      // Mantém o limite apenas se o bloco que ele INICIA tem >= 10 linhas.
+      // O limite 0 sempre fica; os demais só se o bloco for substancial.
+      if (start === 0 || nonEmpty >= 10) keep.add(start);
+    }
+    setBoundaries(keep);
   }, []);
 
   const toggleBoundary = (li) => {

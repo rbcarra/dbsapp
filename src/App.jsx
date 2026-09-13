@@ -1707,12 +1707,12 @@ export default function App() {
             onChange={(e) => {
               setNotasLivres(e.target.value);
               e.target.style.height = 'auto';
-              e.target.style.height = Math.max(300, e.target.scrollHeight) + 'px';
+              e.target.style.height = Math.max(60, e.target.scrollHeight) + 'px';
             }}
             onFocus={(e) => { e.target.style.height = 'auto'; e.target.style.height = Math.max(60, e.target.scrollHeight) + 'px'; }}
             placeholder="Cole ou registre aqui a evolução do paciente..."
             rows={2}
-            style={{ minHeight: '300px', height: notasLivres ? 'auto' : '300px' }}
+            style={{ minHeight: '60px', height: notasLivres ? 'auto' : '60px' }}
             className="w-full p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none text-slate-700 leading-relaxed overflow-hidden"
           />
           <div className="flex items-center justify-between mt-2">
@@ -2874,8 +2874,9 @@ export default function App() {
                   timestamp: ts,
                   dadosGrupos: convertParsedGrupos(row.parsed, row.tipoEletrodo),
                   tipoEletrodo: row.tipoEletrodo || '4-ring',
-                  resumoSessao: row.evolution || '',
-                  notasLivres: '',
+                  resumoSessao: '',
+                  notasLivres: [row.date, row.evolution, row.programmingRaw]
+                    .filter(Boolean).join('\n\n'),
                   tendenciasEstimulacao: row.tendencias || '',
                   clinica: '',
                   type: 'active',
