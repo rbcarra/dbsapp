@@ -1145,8 +1145,9 @@ export default function App() {
         const perc = prog.contatos[c].perc;
         return perc < 100 ? `${st}(${perc}%)` : st;
       }).join('');
-      const linha = `[Lead ${leadStr} ${contactStr} ${prog.amp.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz — ${tipo}]`;
-      setNotasLivres(prev => (prev ? prev + '\n' : '') + linha);
+      const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      const linha = `[${hora}] Grupo ${grupoAtivo} Lead ${leadStr} ${contactStr} ${prog.amp.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz — ${tipo}`;
+      setLogEventos(prev => (prev ? prev + '\n' : '') + linha);
     }
   };
 
