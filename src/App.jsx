@@ -4,9 +4,7 @@ import { collection, doc, setDoc, getDoc, onSnapshot, addDoc, deleteDoc, updateD
 
 import { ORDEM_TEXTO_BAIXO_CIMA, MARCADOR_LETRAS, EFEITO_OPTS, getEfeitoCor,
   opacidadeMarcador, getContatosIniciais, getStringConfig, formatarData,
-  convertParsedGrupos, criarProgramaVazio,
-  ELETRODOS, getEletrodo, listaEletrodos, normalizeGrupos,
-  contatosParaTextoProntuario } from './constants';
+  convertParsedGrupos, criarProgramaVazio } from './constants';
 import { getDirLevel, dirUnitVector2D, calcAmpEfetiva, classifyStim } from './vectorHelpers';
 import { BlocoColapsavel, LoginModal, PatientSelector, ConfirmDialog } from './PatientComponents';
 import { RenderPrograma } from './ProgramComponents';
@@ -58,6 +56,7 @@ export default function App() {
   const [resumoSessao, setResumoSessao] = useState("");
   const [transcricaoBruta, setTranscricaoBruta] = useState("");
   const [transcricaoOrganizada, setTranscricaoOrganizada] = useState("");
+  const [logEventos, setLogEventos] = useState("");
   const [aiConfig, setAiConfig] = useState(getAIConfig);
   const [aiHealth, setAiHealth] = useState({ ollama: false, transcribe: false });
   const [showAISettings, setShowAISettings] = useState(false);
@@ -134,7 +133,7 @@ export default function App() {
   const [enderecoSalvo, setEnderecoSalvo] = useState("");
   const [prescricoesSalvas, setPrescricoesSalvas] = useState({});
   const [customDocs, setCustomDocs] = useState([]);
-  const [activeTab, setActiveTab] = useState('programacao'); // 'programacao' | 'calculadoras'
+  const [activeTab, setActiveTab] = useState('evolucao'); // 'evolucao' | 'programacao' | 'calculadoras'
   const [marcadoresClinicosL, setMarcadoresClinicosL] = useState([]);
   const [marcadoresClinicosR, setMarcadoresClinicosR] = useState([]);
 
@@ -161,16 +160,34 @@ export default function App() {
   const [structuralMapL, setStructuralMapL] = useState(null);
   const [structuralMapR, setStructuralMapR] = useState(null);
   const [autoSaveStatus, setAutoSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
+  // Helper: cap programs to max 2 per side in any dadosGrupos object
+  const capPrograms = (grupos) => {
+    if (!grupos) return grupos;
+    try {
+      const safe = JSON.parse(JSON.stringify(grupos));
+      Object.values(safe).forEach((grupo, gi) => {
+        if (!grupo || typeof grupo !== 'object') {
+          // Replace null/non-object group with empty valid structure
+          const keys = Object.keys(safe);
+          safe[keys[gi]] = { L: [], R: [] };
+          return;
+        }
+        ['L','R'].forEach(lado => {
+          if (!Array.isArray(grupo[lado])) { grupo[lado] = []; return; }
+          if (grupo[lado].length > 2) grupo[lado] = grupo[lado].slice(0, 2);
+        });
+      });
+      return safe;
+    } catch(e) { console.error('capPrograms error:', e); return grupos; }
+  };
 
-  // NOTA: capPrograms foi substituído por normalizeGrupos (constants.js), que
-  // além de limitar a 2 programas por lado também ajusta as chaves de contato
-  // ao tipo de eletrodo da sessão.
 
   const [considerarAmplitude, setConsiderarAmplitude] = useState(false);
   const [blocosAbertos, setBlocosAbertos] = useState({
     progAnterior: true,
     transcricaoBruta: false,
     transcricaoOrganizada: false,
+    logEventos: false,
     progAtual: true,
     prontuario: true,
     reconstrucao: true,
@@ -272,7 +289,7 @@ export default function App() {
           if (d.modoAmplitude) setModoAmplitude(d.modoAmplitude);
           if (d.dadosGrupos) {
             const tipoEl = d.tipoEletrodo || '4-ring';
-            setDadosGrupos(normalizeGrupos(d.dadosGrupos, tipoEl));
+            setDadosGrupos(capPrograms(normalizeGrupos(d.dadosGrupos, tipoEl)) || d.dadosGrupos);
           }
           if (d.clinica) setClinica(d.clinica);
           if (d.efeitosColaterais) setEfeitosColaterais(d.efeitosColaterais);
@@ -280,6 +297,7 @@ export default function App() {
           if (d.resumoSessao !== undefined) setResumoSessao(d.resumoSessao);
           if (d.transcricaoBruta !== undefined) setTranscricaoBruta(d.transcricaoBruta);
           if (d.transcricaoOrganizada !== undefined) setTranscricaoOrganizada(d.transcricaoOrganizada);
+          if (d.logEventos !== undefined) setLogEventos(d.logEventos);
           if (d.voltagemBateria !== undefined) setVoltagemBateria(d.voltagemBateria);
           if (d.impedanciaL !== undefined) setImpedanciaL(d.impedanciaL);
           if (d.impedanciaR !== undefined) setImpedanciaR(d.impedanciaR);
@@ -292,11 +310,7 @@ export default function App() {
           if (d.customDocs) setCustomDocs(d.customDocs);
           if (d.editingSessionId) setEditingSessionId(d.editingSessionId);
         }
-      } catch (err) {
-        // Falhas aqui abortam a restauração inteira do rascunho — não devem ser silenciosas
-        console.error('Erro ao restaurar rascunho (temp_sessions):', err);
-        showToast('Não foi possível restaurar o rascunho salvo.');
-      }
+      } catch (err) {}
     };
     fetchTemp();
   }, [user, activePatient]);
@@ -321,7 +335,7 @@ export default function App() {
     if (!user || !activePatient || isInitializing || showLoginModal) return;
     const timer = setTimeout(() => {
       setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'temp_sessions', activePatient.id), {
-        tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao, transcricaoBruta, transcricaoOrganizada,
+        tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao, transcricaoBruta, transcricaoOrganizada, logEventos,
         voltagemBateria, impedanciaL, impedanciaR,
         marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao,
         enderecoSalvo, prescricoesSalvas, customDocs,
@@ -330,7 +344,7 @@ export default function App() {
       }).catch(() => {});
     }, 1500);
     return () => clearTimeout(timer);
-  }, [tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao, transcricaoBruta, transcricaoOrganizada, voltagemBateria, impedanciaL, impedanciaR, marcadoresClinicosL, marcadoresClinicosR, editingSessionId, user, activePatient, isInitializing, showLoginModal]);
+  }, [tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao, transcricaoBruta, transcricaoOrganizada, logEventos, voltagemBateria, impedanciaL, impedanciaR, marcadoresClinicosL, marcadoresClinicosR, editingSessionId, user, activePatient, isInitializing, showLoginModal]);
 
   // A sessão em edição é "antiga" (não é a mais recente ativa)?
   const editandoSessaoAntiga = React.useMemo(() => {
@@ -409,7 +423,7 @@ export default function App() {
           patientId: activePatient.id,
           timestamp: sessions.find(s => s.id === editingSessionId)?.timestamp || Date.now(),
           type: 'active',
-          tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao, transcricaoBruta, transcricaoOrganizada,
+          tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao, transcricaoBruta, transcricaoOrganizada, logEventos,
           voltagemBateria, impedanciaL, impedanciaR,
           marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao
         };
@@ -422,13 +436,14 @@ export default function App() {
       }
     }, 1500);
     return () => { if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current); };
-  }, [tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao, transcricaoBruta, transcricaoOrganizada,
+  }, [tipoEletrodo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao, transcricaoBruta, transcricaoOrganizada, logEventos,
       voltagemBateria, impedanciaL, impedanciaR,
       marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao, editingSessionId, editandoSessaoAntiga]);
 
   const gerarTextoProntuario = (grupos, eletrodo) => {
     let text = '';
-
+    const ordem = ORDEM_TEXTO_BAIXO_CIMA[eletrodo];
+    
     ['A', 'B', 'C', 'D'].forEach(g => {
       text += `Grupo ${g}:\n`;
       ['L', 'R'].forEach(lado => {
@@ -436,7 +451,14 @@ export default function App() {
         progs.forEach((prog, idx) => {
           const leadStr = lado === 'L' ? 'E' : 'D';
           const leadName = progs.length > 1 ? `Lead ${leadStr}${idx + 1}` : `Lead ${leadStr}`;
-          const contactStr = contatosParaTextoProntuario(prog.contatos, eletrodo);
+          
+          const contactStr = ordem.map(c => {
+            const st = prog.contatos[c].state;
+            if (st === 'off') return '0';
+            const perc = prog.contatos[c].perc;
+            if (perc < 100) return `${st}(${perc}%)`;
+            return st;
+          }).join('');
           if ((prog.amp || 0) > 0) {
             text += `${leadName} ${contactStr} ${prog.amp.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz\n`;
           }
@@ -465,8 +487,6 @@ export default function App() {
       `Data: ${hoje}`,
       `Paciente: ${activePatient?.nome || ''}`,
       `Registro HC: ${activePatient?.hc || ''}`,
-      '',
-      `Eletrodo: ${getEletrodo(tipoEletrodo).label}`,
       '',
       '--- EVOLUÇÃO ---',
       notasLivres || '(sem anotações)',
@@ -673,8 +693,7 @@ export default function App() {
         if (temSessoes) {
           for (const i of linhasIdx) {
             const cols = parseLine(_linhas[i]);
-            const tipoElRaw = get(cols, 'Eletrodo') || '4-ring';
-            const tipoEl = ELETRODOS[tipoElRaw] ? tipoElRaw : '4-ring';
+            const tipoEl = get(cols, 'Eletrodo') || '4-ring';
             const gruposKeys = ['A', 'B', 'C', 'D'];
             const dadosGruposImp = {};
             gruposKeys.forEach(g => {
@@ -706,16 +725,16 @@ export default function App() {
             const ecRStr = get(cols, 'EfeitosColateraisD');
             try {
               // Apply per-program cycling from compact string
-              const cyclingStr = get(cols, 'Cycling') || '';
-              if (cyclingStr) {
-                cyclingStr.split(';').filter(Boolean).forEach(entry => {
-                  const [g, leadIdx] = entry.split('/');
-                  const side = leadIdx?.startsWith('E') ? 'L' : 'R';
-                  const idx = leadIdx?.length > 1 ? parseInt(leadIdx.slice(1)) - 1 : 0;
-                  if (dadosGruposImp[g]?.[side]?.[idx]) dadosGruposImp[g][side][idx].cycling = true;
-                });
-              }
-              await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'sessions'), {
+          const cyclingStr = get('Cycling') || '';
+          if (cyclingStr) {
+            cyclingStr.split(';').filter(Boolean).forEach(entry => {
+              const [g, leadIdx] = entry.split('/');
+              const side = leadIdx?.startsWith('E') ? 'L' : 'R';
+              const idx = leadIdx?.length > 1 ? parseInt(leadIdx.slice(1)) - 1 : 0;
+              if (dadosGruposImp[g]?.[side]?.[idx]) dadosGruposImp[g][side][idx].cycling = true;
+            });
+          }
+          await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'sessions'), {
                 patientId: pacienteId,
                 timestamp: (() => {
                   const dataStr = get(cols, 'Data');
@@ -751,6 +770,9 @@ export default function App() {
       return temSessoes
         ? `${pacientesCriados} paciente(s) criado(s), ${sessoesImportadas} sessão(ões) importada(s).`
         : `${pacientesCriados} paciente(s) importado(s).`;
+      // Apply endereco from first session that has it
+      const firstEndereco = reviewed.find(r => r.endereco)?.endereco || '';
+      if (firstEndereco) setEnderecoSalvo(firstEndereco);
     } catch(err) {
       console.error(err);
       return 'Erro ao importar CSV.';
@@ -786,20 +808,25 @@ export default function App() {
           'EfeitosColateraisE', 'EfeitosColateraisD', 'NotasLivres'
         ];
         const linhas = sessDoPaciente.map(s => {
-          const tipoElSess = s.tipoEletrodo || '4-ring';
           const row = [
             paciente.nome || '',
             paciente.hc || '',
             formatarData(s.timestamp),
             (s.resumoSessao || '').replace(/[\n,]/g, ' '),
-            tipoElSess, s.voltagemBateria || '',
+            s.tipoEletrodo || '', s.voltagemBateria || '',
             s.impedanciaL || '', s.impedanciaR || '',
           ];
           gruposKeys.forEach(g => {
             [['L','E'],['R','D']].forEach(([l]) => {
               const prog = s.dadosGrupos?.[g]?.[l]?.[0];
               if (prog) {
-                const contStr = contatosParaTextoProntuario(prog.contatos, tipoElSess);
+                const ordem = ORDEM_TEXTO_BAIXO_CIMA[s.tipoEletrodo || '4-ring'];
+                const contStr = ordem.map(c => {
+                  const st = prog.contatos?.[c]?.state || 'off';
+                  if (st === 'off') return '0';
+                  const perc = prog.contatos?.[c]?.perc;
+                  return perc && perc < 100 ? `${st}(${perc}%)` : st;
+                }).join('');
                 row.push(contStr, prog.amp ?? '', prog.pw ?? '', prog.freq ?? '', prog.efeito || '');
               } else { row.push('', '', '', '', ''); }
             });
@@ -845,6 +872,10 @@ export default function App() {
       showToast('Erro ao apagar paciente.');
     }
   };
+
+  // Helper: convert extractor's parsed dadosGrupos (contatos as string "–-0+")
+  // to the app's format (contatos as object {0:{state:'-',perc:100},...})
+
 
   // Guard: salvar sobre registro antigo exige confirmação
   const handleSalvarComGuarda = (modoAtualizar) => {
@@ -919,9 +950,10 @@ export default function App() {
   // Create a fresh empty session
   const handleCriarSessaoVazia = async () => {
     if (!user || !activePatient) return;
-    // Cada programa recebe seu PRÓPRIO objeto de contatos — antes todos
-    // compartilhavam a mesma referência e se alteravam juntos.
-    const emptyGrupos = normalizeGrupos(null, '4-ring');
+    const empty4ring = getContatosIniciais('4-ring');
+    const makeEmpty = () => ({ contatos: empty4ring, amp: 0, pw: 60, freq: 130, efeito: 'neutro' });
+    const emptyGrupos = { A:{L:[makeEmpty()],R:[makeEmpty()]}, B:{L:[makeEmpty()],R:[makeEmpty()]},
+                          C:{L:[makeEmpty()],R:[makeEmpty()]}, D:{L:[makeEmpty()],R:[makeEmpty()]} };
     const sessionData = {
       patientId: activePatient.id, timestamp: Date.now(), type: 'active',
       tipoEletrodo: '4-ring', modoAmplitude: 'mA',
@@ -929,14 +961,14 @@ export default function App() {
         alvoAnatomicoE:'', alvoAnatomicoD:'', dataImplante:'', dataTrocaIPG:'' },
       dadosGrupos: emptyGrupos,
       clinica: { tremor:0, rigidez:0, bradicinesia:0 },
-      efeitosColaterais: { L:[], R:[] }, notasLivres: '', resumoSessao: '', transcricaoBruta: '', transcricaoOrganizada: '',
+      efeitosColaterais: { L:[], R:[] }, notasLivres: '', resumoSessao: '', transcricaoBruta: '', transcricaoOrganizada: '', logEventos: '',
       voltagemBateria: '', impedanciaL: '', impedanciaR: '',
       marcadoresClinicosL: [], marcadoresClinicosR: [], tendenciasEstimulacao: ''
     };
     try {
       const docRef = await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'sessions'), sessionData);
       // Reset UI to empty state
-      setTipoEletrodo('4-ring'); setDadosGrupos(normalizeGrupos(null, '4-ring'));
+      setTipoEletrodo('4-ring'); setDadosGrupos(emptyGrupos);
       setClinica({ tremor:0, rigidez:0, bradicinesia:0 }); setEfeitosColaterais({ L:[], R:[] });
       setNotasLivres(''); setResumoSessao(''); setVoltagemBateria('');
       setImpedanciaL(''); setImpedanciaR('');
@@ -969,9 +1001,8 @@ export default function App() {
   };
 
   const loadSession = (sess) => {
-    const tipoEl = sess.tipoEletrodo || '4-ring';
-    setTipoEletrodo(tipoEl);
-    try { setDadosGrupos(normalizeGrupos(sess.dadosGrupos, tipoEl)); }
+    setTipoEletrodo(sess.tipoEletrodo || '4-ring');
+    try { setDadosGrupos(capPrograms(sess.dadosGrupos) || sess.dadosGrupos); }
     catch(e) { console.error('Erro ao carregar grupos:', e); showToast('Erro ao carregar programação da sessão'); }
     setClinica(sess.clinica || { tremor: 0, rigidez: 0, bradicinesia: 0 });
     setEfeitosColaterais(sess.efeitosColaterais || { L: [], R: [] });
@@ -979,6 +1010,7 @@ export default function App() {
     setResumoSessao(sess.resumoSessao || "");
     setTranscricaoBruta(sess.transcricaoBruta || "");
     setTranscricaoOrganizada(sess.transcricaoOrganizada || "");
+    setLogEventos(sess.logEventos || "");
     setVoltagemBateria(sess.voltagemBateria || "");
     setImpedanciaL(sess.impedanciaL || "");
     setImpedanciaR(sess.impedanciaR || "");
@@ -994,16 +1026,14 @@ export default function App() {
 
   const capturarEstadoAtual = () => ({
     tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais,
-    notasLivres, resumoSessao, transcricaoBruta, transcricaoOrganizada,
+    notasLivres, resumoSessao, transcricaoBruta, transcricaoOrganizada, logEventos,
     voltagemBateria, impedanciaL, impedanciaR,
     marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao,
   });
 
   const aplicarEstado = (s) => {
-    const tipoEl = s.tipoEletrodo || '4-ring';
-    setTipoEletrodo(tipoEl);
-    try { setDadosGrupos(normalizeGrupos(s.dadosGrupos, tipoEl)); }
-    catch(e) { console.error('Erro ao aplicar estado:', e); }
+    setTipoEletrodo(s.tipoEletrodo || '4-ring');
+    try { setDadosGrupos(capPrograms(normalizeGrupos(s.dadosGrupos, s.tipoEletrodo||'4-ring')) || s.dadosGrupos); } catch(e){}
     setModoAmplitude(s.modoAmplitude || 'mA');
     setDispositivoInfo(s.dispositivoInfo || { fabricante:'', modeloIPG:'', modeloEletrodoE:'', modeloEletrodoD:'', alvoAnatomicoE:'', alvoAnatomicoD:'', dataImplante:'', dataTrocaIPG:'' });
     setClinica(s.clinica || { tremor:0, rigidez:0, bradicinesia:0 });
@@ -1012,6 +1042,7 @@ export default function App() {
     setResumoSessao(s.resumoSessao || '');
     setTranscricaoBruta(s.transcricaoBruta || '');
     setTranscricaoOrganizada(s.transcricaoOrganizada || '');
+    setLogEventos(s.logEventos || '');
     setVoltagemBateria(s.voltagemBateria || '');
     setImpedanciaL(s.impedanciaL || '');
     setImpedanciaR(s.impedanciaR || '');
@@ -1043,9 +1074,8 @@ export default function App() {
   const handleCopiarUltimaSessao = () => {
     const ultimaAtiva = sessions.find(s => s.type === 'active');
     if (ultimaAtiva) {
-      const tipoEl = ultimaAtiva.tipoEletrodo || '4-ring';
-      setTipoEletrodo(tipoEl);
-      try { setDadosGrupos(normalizeGrupos(ultimaAtiva.dadosGrupos, tipoEl)); }
+      setTipoEletrodo(ultimaAtiva.tipoEletrodo || '4-ring');
+      try { setDadosGrupos(capPrograms(ultimaAtiva.dadosGrupos) || ultimaAtiva.dadosGrupos); }
       catch(e) { console.error('Erro ao carregar ultima sessao:', e); }
       setClinica(ultimaAtiva.clinica || { tremor: 0, rigidez: 0, bradicinesia: 0 });
       setEfeitosColaterais(ultimaAtiva.efeitosColaterais || { L: [], R: [] });
@@ -1053,6 +1083,7 @@ export default function App() {
       setResumoSessao(ultimaAtiva.resumoSessao || "");
       setTranscricaoBruta(ultimaAtiva.transcricaoBruta || "");
       setTranscricaoOrganizada(ultimaAtiva.transcricaoOrganizada || "");
+      setLogEventos(ultimaAtiva.logEventos || "");
       setVoltagemBateria(ultimaAtiva.voltagemBateria || "");
       setImpedanciaL(ultimaAtiva.impedanciaL || "");
       setImpedanciaR(ultimaAtiva.impedanciaR || "");
@@ -1100,7 +1131,14 @@ export default function App() {
     const isColateral = !['tremor','rigidez','bradicinesia'].includes(tipo);
     if (isColateral) {
       const leadStr = lado === 'L' ? 'E' : 'D';
-      const contactStr = contatosParaTextoProntuario(prog.contatos, tipoEletrodo);
+      // Gerar string de contatos
+      const ordem = ORDEM_TEXTO_BAIXO_CIMA[tipoEletrodo];
+      const contactStr = ordem.map(c => {
+        const st = prog.contatos[c]?.state || 'off';
+        if (st === 'off') return '0';
+        const perc = prog.contatos[c].perc;
+        return perc < 100 ? `${st}(${perc}%)` : st;
+      }).join('');
       const linha = `[Lead ${leadStr} ${contactStr} ${prog.amp.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz — ${tipo}]`;
       setNotasLivres(prev => (prev ? prev + '\n' : '') + linha);
     }
@@ -1138,16 +1176,21 @@ export default function App() {
   const handleEfeitoGrupo = async (grupo, efeito, textoEfeito) => {
     if (!user || !activePatient || !sessaoReferencia) return;
     const ultima = sessaoReferencia;
-    const tipoElRef = ultima.tipoEletrodo || '4-ring';
 
     // Gerar texto da programação do grupo (E e D)
+    const ordem = ORDEM_TEXTO_BAIXO_CIMA[ultima.tipoEletrodo || '4-ring'];
     let progTexto = '';
     ['L','R'].forEach(lado => {
       const leadStr = lado === 'L' ? 'E' : 'D';
       (ultima.dadosGrupos?.[grupo]?.[lado] || []).forEach((prog, idx) => {
         const progs = ultima.dadosGrupos[grupo][lado];
         const leadName = progs.length > 1 ? `Lead ${leadStr}${idx+1}` : `Lead ${leadStr}`;
-        const contactStr = contatosParaTextoProntuario(prog.contatos, tipoElRef);
+        const contactStr = ordem.map(c => {
+          const st = prog.contatos?.[c]?.state || 'off';
+          if (st === 'off') return '0';
+          const perc = prog.contatos[c].perc;
+          return perc < 100 ? `${st}(${perc}%)` : st;
+        }).join('');
         progTexto += `${leadName} ${contactStr} ${prog.amp?.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz
 `;
       });
@@ -1167,14 +1210,11 @@ export default function App() {
       });
     } catch(e) { console.error('Erro ao salvar efeito:', e); }
 
-    // Acrescentar texto na anotação
-    const linhaTexto = `
---- Programação da última sessão ---
-Grupo ${grupo}:
-${progTexto}Avaliação: ${textoEfeito}
-`;
-    setNotasLivres(prev => (prev || '') + linhaTexto);
-    showToast(`Efeito do Grupo ${grupo} salvo: ${textoEfeito}`);
+    // Acrescentar no Log de eventos com timestamp
+    const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    const linhaTexto = `[${hora}] Grupo ${grupo} — ${textoEfeito}\n${progTexto}`;
+    setLogEventos(prev => (prev ? prev + '\n' : '') + linhaTexto);
+    showToast(`Efeito do Grupo ${grupo} registrado no log: ${textoEfeito}`);
   };
 
   // --- FOTOS DE RECONSTRUÇÃO (Item 9) ---
@@ -1267,10 +1307,16 @@ ${progTexto}Avaliação: ${textoEfeito}
 
     const linhas = ativas.map(s => {
       const tipoEl = s.tipoEletrodo || '4-ring';
+      const ordem = ORDEM_TEXTO_BAIXO_CIMA[tipoEl];
       const contatosToCSV = (prog) => {
         if (!prog) return '';
         if (typeof prog.contatos === 'string') return prog.contatos;
-        return contatosParaTextoProntuario(prog.contatos, tipoEl);
+        return ordem.map(c => {
+          const st = prog.contatos?.[c]?.state || 'off';
+          if (st === 'off') return '0';
+          const perc = prog.contatos?.[c]?.perc;
+          return perc && perc < 100 ? `${st}(${perc}%)` : st;
+        }).join('');
       };
       const row = [
         activePatient?.nome || '',
@@ -1347,8 +1393,7 @@ ${progTexto}Avaliação: ${textoEfeito}
     for (let i = 1; i < linhas.length; i++) {
       const cols = parseCsv(linhas[i]);
       const get = (nome) => { const idx = cabeçalho.indexOf(nome); return idx >= 0 ? cols[idx] || '' : ''; };
-      const tipoElRaw = get('Eletrodo') || '4-ring';
-      const tipoEl = ELETRODOS[tipoElRaw] ? tipoElRaw : '4-ring';
+      const tipoEl = get('Eletrodo') || '4-ring';
       const gruposKeys = ['A', 'B', 'C', 'D'];
       const dadosGruposImp = {};
       const parseContStr = (contStr, tipoEl2) => {
@@ -1441,14 +1486,10 @@ ${progTexto}Avaliação: ${textoEfeito}
 
   const handleMudarTipoEletrodo = (e) => {
     const novoTipo = e.target.value;
-    const anterior = tipoEletrodo;
-    if (novoTipo === anterior) return;
     setTipoEletrodo(novoTipo);
-    // Preserva os contatos cuja chave existe nos dois eletrodos; os demais voltam a 'off'
-    setDadosGrupos(prev => normalizeGrupos(prev, novoTipo));
-    const chavesNovas = getEletrodo(novoTipo).ordemBaixoCima;
-    const perdeu = getEletrodo(anterior).ordemBaixoCima.some(k => !chavesNovas.includes(k));
-    if (perdeu) showToast('Eletrodo alterado — contatos sem equivalente foram zerados.');
+    const reset = {};
+    ['A', 'B', 'C', 'D'].forEach(g => { reset[g] = { L: [criarProgramaInicial(novoTipo)], R: [criarProgramaInicial(novoTipo)] }; });
+    setDadosGrupos(reset);
   };
 
   const setProgsAtual = (lado, novoValorOuFuncao) => {
@@ -1473,8 +1514,7 @@ ${progTexto}Avaliação: ${textoEfeito}
   const atualizarContatoState = (lado, index, chaveContato, novoEstado) => {
     setProgsAtual(lado, prev => {
       const novo = [...prev];
-      const atual = novo[index].contatos?.[chaveContato] || { state: 'off', perc: 100 };
-      novo[index] = { ...novo[index], contatos: { ...novo[index].contatos, [chaveContato]: { state: novoEstado, perc: novoEstado === 'off' ? 100 : atual.perc } } };
+      novo[index].contatos = { ...novo[index].contatos, [chaveContato]: { state: novoEstado, perc: novoEstado === 'off' ? 100 : novo[index].contatos[chaveContato].perc } };
       return novo;
     });
   };
@@ -1482,8 +1522,7 @@ ${progTexto}Avaliação: ${textoEfeito}
   const atualizarContatoPerc = (lado, index, chaveContato, novaPerc) => {
     setProgsAtual(lado, prev => {
       const novo = [...prev];
-      const atual = novo[index].contatos?.[chaveContato] || { state: 'off', perc: 100 };
-      novo[index] = { ...novo[index], contatos: { ...novo[index].contatos, [chaveContato]: { ...atual, perc: novaPerc } } };
+      novo[index].contatos = { ...novo[index].contatos, [chaveContato]: { ...novo[index].contatos[chaveContato], perc: novaPerc } };
       return novo;
     });
   };
@@ -1554,11 +1593,9 @@ ${progTexto}Avaliação: ${textoEfeito}
           <div className="flex items-center bg-slate-800 rounded px-2 py-1.5 hidden md:flex">
             <span className="text-[10px] uppercase tracking-wider text-slate-400 mr-2">Eletrodo:</span>
             <select value={tipoEletrodo} onChange={handleMudarTipoEletrodo} className="bg-white text-slate-900 font-bold text-sm focus:outline-none cursor-pointer rounded px-1 py-0.5">
-              {listaEletrodos().map(el => (
-                <option key={el.id} value={el.id} title={el.descricao}>
-                  {el.label} · {el.nContatos} contatos
-                </option>
-              ))}
+              <option value="4-ring">4 Contatos</option>
+              <option value="8-ring">8 Contatos</option>
+              <option value="directional">Direcional</option>
             </select>
           </div>
           
@@ -1604,7 +1641,7 @@ ${progTexto}Avaliação: ${textoEfeito}
 
         {/* TAB BAR */}
         <div className="flex gap-1 mb-3 border-b border-slate-200 pb-1">
-          {[['programacao','⚡ Programação'],['calculadoras','🧮 Calculadoras e Receitas']].map(([id,label]) => (
+          {[['evolucao','📋 Evolução'],['programacao','⚡ Programação'],['calculadoras','🧮 Calculadoras e Receitas']].map(([id,label]) => (
             <button key={id} onClick={() => setActiveTab(id)}
               className={`px-3 py-1.5 text-xs font-bold rounded-t transition-all ${activeTab===id?'bg-white border border-b-white border-slate-200 text-slate-800 -mb-px':'text-slate-400 hover:text-slate-600'}`}>
               {label}
@@ -1637,7 +1674,7 @@ ${progTexto}Avaliação: ${textoEfeito}
           </div>
         )}
 
-        {activeTab === 'programacao' && <>
+        {activeTab === 'evolucao' && <>
 
         {/* BLOCO: PRONTUÁRIO — compact evolution-first layout */}
         <BlocoColapsavel
@@ -1668,7 +1705,7 @@ ${progTexto}Avaliação: ${textoEfeito}
             onFocus={(e) => { e.target.style.height = 'auto'; e.target.style.height = Math.max(60, e.target.scrollHeight) + 'px'; }}
             placeholder="Cole ou registre aqui a evolução do paciente..."
             rows={2}
-            style={{ minHeight: '600px', height: notasLivres ? 'auto' : '600px' }}
+            style={{ minHeight: '60px', height: notasLivres ? 'auto' : '60px' }}
             className="w-full p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none text-slate-700 leading-relaxed overflow-hidden"
           />
           <div className="flex items-center justify-between mt-2">
@@ -1766,7 +1803,7 @@ ${progTexto}Avaliação: ${textoEfeito}
             </p>
           ) : (() => {
             const ultima = sessaoReferencia;
-            const tipoElRef = ultima?.tipoEletrodo || '4-ring';
+            const ordem = ORDEM_TEXTO_BAIXO_CIMA[ultima?.tipoEletrodo || '4-ring'];
             const grupoA = ultima.dadosGrupos?.['A'] || {};
 
             // Helper: compare prog config+amp+pw+freq against group A for a given side
@@ -1795,7 +1832,131 @@ ${progTexto}Avaliação: ${textoEfeito}
                     (ultima.dadosGrupos?.[grupo]?.[lado] || []).forEach((prog, idx) => {
                       const progs = ultima.dadosGrupos[grupo][lado];
                       const leadName = progs.length > 1 ? `Lead ${leadStr}${idx+1}` : `Lead ${leadStr}`;
-                      const contactStr = contatosParaTextoProntuario(prog.contatos, tipoElRef);
+                      const contactStr = ordem.map(c => {
+                        const st = prog.contatos?.[c]?.state || 'off';
+                        if (st === 'off') return '0';
+                        const perc = prog.contatos[c].perc;
+                        return perc < 100 ? `${st}(${perc}%)` : st;
+                      }).join('');
+                      const label = igual ? `${leadName} ${contactStr} ${prog.amp?.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz  [= Grupo A]`
+                                          : `${leadName} ${contactStr} ${prog.amp?.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz`;
+                      linhasGrupo.push(label);
+                    });
+                  });
+                  // Only show scoring buttons for sides with changed programming
+                  const mostrarBotoes = grupo === 'A' || ladosMudados.length > 0;
+                  const notaLado = ladosMudados.length === 1
+                    ? ` (${ladosMudados[0] === 'L' ? 'E' : 'D'} modificado)`
+                    : '';
+                  return (
+                    <div key={grupo} className="flex flex-col sm:flex-row sm:items-start gap-2 p-2 rounded-lg bg-slate-50 border border-slate-100">
+                      <div className="shrink-0">
+                        <span className="text-xs font-black text-slate-700 block mb-1.5">
+                          Grupo {grupo}{notaLado && <span className="font-normal text-indigo-500 text-[9px] ml-1">{notaLado}</span>}
+                        </span>
+                        {mostrarBotoes && (
+                          <div className="flex flex-wrap gap-1">
+                            {[
+                              ...EFEITO_OPTS.map(o => [o.val, o.label, getEfeitoCor(o.val, 'btnCls')]),
+                            ].map(([efVal, label, cls]) => (
+                              <button key={label} onClick={() => handleEfeitoGrupo(grupo, efVal, label)}
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all shadow-sm ${cls}`}>
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <pre className="text-[10px] font-mono text-slate-500 leading-relaxed whitespace-pre-wrap flex-1 pl-0 sm:pl-3 sm:border-l border-slate-200">
+                        {linhasGrupo.join('\n')}
+                      </pre>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+        </BlocoColapsavel>
+
+        {/* BLOCO: LOG DE EVENTOS NA PROGRAMAÇÃO */}
+        <BlocoColapsavel
+          titulo="Log de eventos na programação"
+          aberto={blocosAbertos.logEventos}
+          onToggle={() => toggleBloco('logEventos')}
+          corHeader="bg-slate-100"
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <p className="text-[10px] text-slate-500 flex-1">
+              Cliques em efeito benefico/colateral dos grupos entram aqui com horario. Salvo por sessao.
+            </p>
+            {logEventos && (
+              <button onClick={() => setLogEventos('')}
+                className="text-[10px] text-slate-400 hover:text-rose-500 underline">limpar</button>
+            )}
+          </div>
+          <textarea
+            value={logEventos}
+            onChange={e => setLogEventos(e.target.value)}
+            placeholder="Eventos da sessao de programacao aparecerao aqui (ex: [14:32] Grupo B — Col. marcha)..."
+            rows={5}
+            className="w-full p-3 text-xs font-mono bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-y text-slate-700 leading-relaxed"
+          />
+        </BlocoColapsavel>
+
+        </> /* end evolucao tab */}
+
+        {activeTab === 'programacao' && <>
+
+        {/* BLOCO: PROGRAMAÇÃO ANTERIOR */}
+        <BlocoColapsavel
+          titulo="Programação Anterior"
+          aberto={blocosAbertos.progAnterior}
+          onToggle={() => toggleBloco('progAnterior')}
+          corHeader="bg-indigo-50"
+        >
+          {(!sessaoReferencia || gruposComSessao.length === 0) ? (
+            <p className="text-xs text-slate-400 italic">
+              {!sessaoReferencia
+                ? 'Esta é a primeira sessão registrada — sem sessão anterior para referência.'
+                : 'Nenhuma sessão anterior com programação ativa registrada.'}
+            </p>
+          ) : (() => {
+            const ultima = sessaoReferencia;
+            const ordem = ORDEM_TEXTO_BAIXO_CIMA[ultima?.tipoEletrodo || '4-ring'];
+            const grupoA = ultima.dadosGrupos?.['A'] || {};
+
+            // Helper: compare prog config+amp+pw+freq against group A for a given side
+            const igualAoGrupoA = (grupo, lado) => {
+              if (grupo === 'A') return false; // grupo A always shows buttons
+              const progsA = grupoA[lado] || [];
+              const progsG = ultima.dadosGrupos?.[grupo]?.[lado] || [];
+              if (progsA.length !== progsG.length) return false;
+              return progsG.every((p, i) => {
+                const a = progsA[i];
+                if (!a) return false;
+                return getStringConfig(p.contatos) === getStringConfig(a.contatos)
+                  && p.amp === a.amp && p.pw === a.pw && p.freq === a.freq;
+              });
+            };
+
+            return (
+              <div className="flex flex-col gap-3">
+                {gruposComSessao.map(grupo => {
+                  let linhasGrupo = [];
+                  const ladosMudados = [];
+                  ['L','R'].forEach(lado => {
+                    const leadStr = lado === 'L' ? 'E' : 'D';
+                    const igual = igualAoGrupoA(grupo, lado);
+                    if (!igual) ladosMudados.push(lado);
+                    (ultima.dadosGrupos?.[grupo]?.[lado] || []).forEach((prog, idx) => {
+                      const progs = ultima.dadosGrupos[grupo][lado];
+                      const leadName = progs.length > 1 ? `Lead ${leadStr}${idx+1}` : `Lead ${leadStr}`;
+                      const contactStr = ordem.map(c => {
+                        const st = prog.contatos?.[c]?.state || 'off';
+                        if (st === 'off') return '0';
+                        const perc = prog.contatos[c].perc;
+                        return perc < 100 ? `${st}(${perc}%)` : st;
+                      }).join('');
                       const label = igual ? `${leadName} ${contactStr} ${prog.amp?.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz  [= Grupo A]`
                                           : `${leadName} ${contactStr} ${prog.amp?.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz`;
                       linhasGrupo.push(label);
@@ -2155,6 +2316,31 @@ ${progTexto}Avaliação: ${textoEfeito}
           </div>
         </BlocoColapsavel>
 
+        {/* BLOCO: LOG DE EVENTOS NA PROGRAMAÇÃO */}
+        <BlocoColapsavel
+          titulo="Log de eventos na programação"
+          aberto={blocosAbertos.logEventos}
+          onToggle={() => toggleBloco('logEventos')}
+          corHeader="bg-slate-100"
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <p className="text-[10px] text-slate-500 flex-1">
+              Cliques em efeito benefico/colateral dos grupos entram aqui com horario. Salvo por sessao.
+            </p>
+            {logEventos && (
+              <button onClick={() => setLogEventos('')}
+                className="text-[10px] text-slate-400 hover:text-rose-500 underline">limpar</button>
+            )}
+          </div>
+          <textarea
+            value={logEventos}
+            onChange={e => setLogEventos(e.target.value)}
+            placeholder="Eventos da sessao de programacao aparecerao aqui (ex: [14:32] Grupo B — Col. marcha)..."
+            rows={5}
+            className="w-full p-3 text-xs font-mono bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-y text-slate-700 leading-relaxed"
+          />
+        </BlocoColapsavel>
+
         {/* BLOCO: IMPORTAÇÃO / EXPORTAÇÃO */}
         <BlocoColapsavel
           titulo="Importação / Exportação"
@@ -2406,12 +2592,10 @@ ${progTexto}Avaliação: ${textoEfeito}
         const minAtras = recente ? Math.round((Date.now() - recente.timestamp) / 60000) : 0;
         const abrirRecente = () => {
           if (!recente) return;
-          const tipoEl = recente.tipoEletrodo || '4-ring';
           setEditingSessionId(recente.id);
-          setTipoEletrodo(tipoEl);
+          setTipoEletrodo(recente.tipoEletrodo || '4-ring');
           setModoAmplitude(recente.modoAmplitude || 'mA');
-          try { setDadosGrupos(normalizeGrupos(recente.dadosGrupos, tipoEl)); }
-          catch(e) { console.error('Erro ao abrir sessão recente:', e); }
+          try { setDadosGrupos(capPrograms(normalizeGrupos(recente.dadosGrupos, recente.tipoEletrodo||'4-ring')) || recente.dadosGrupos); } catch(e){}
           setClinica(recente.clinica || { tremor:0, rigidez:0, bradicinesia:0 });
           setEfeitosColaterais(recente.efeitosColaterais || { L:[], R:[] });
           setNotasLivres(recente.notasLivres || '');
@@ -2460,15 +2644,15 @@ ${progTexto}Avaliação: ${textoEfeito}
       {showHistoricoText && (() => {
         const sessionsAtivas = sessions.filter(s => s.type === 'active')
           .sort((a, b) => b.timestamp - a.timestamp);
+        const ordem = ORDEM_TEXTO_BAIXO_CIMA[tipoEletrodo];
         const linhas = sessionsAtivas.map(sess => {
           const data = formatarData(sess.timestamp);
           const grupos = sess.dadosGrupos || {};
-          const tipoElSess = sess.tipoEletrodo || '4-ring';
+          const ord = ORDEM_TEXTO_BAIXO_CIMA[sess.tipoEletrodo || '4-ring'];
 
           // Header line: date + resumo
           let txt = `${'─'.repeat(50)}\n📅 ${data}`;
           if (sess.resumoSessao) txt += ` — ${sess.resumoSessao}`;
-          txt += `  ·  ${getEletrodo(tipoElSess).label}`;
           txt += '\n';
 
           // Groups with programming + efeito annotation
@@ -2492,7 +2676,12 @@ ${progTexto}Avaliação: ${textoEfeito}
               (grupo[lado] || []).forEach((prog, idx) => {
                 const progs = grupo[lado];
                 const leadName = progs.length > 1 ? `  Lead ${leadStr}${idx+1}` : `  Lead ${leadStr}`;
-                const contactStr = contatosParaTextoProntuario(prog.contatos, tipoElSess);
+                const contactStr = ord.map(c => {
+                  const st = prog.contatos?.[c]?.state || 'off';
+                  if (st === 'off') return '0';
+                  const perc = prog.contatos[c]?.perc;
+                  return perc < 100 ? `${st}(${perc}%)` : st;
+                }).join('');
                 txt += `${leadName}: ${contactStr}  ${prog.amp?.toFixed(1)}mA  ${prog.pw}µs  ${prog.freq}Hz\n`;
               });
             });
@@ -2648,18 +2837,17 @@ ${progTexto}Avaliação: ${textoEfeito}
                   if (!isNaN(parsed.getTime())) ts = parsed.getTime();
                 }
               }
-              const tipoElRow = row.tipoEletrodo || '4-ring';
               await addDoc(
                 collection(db, `artifacts/${appId}/users/${user.uid}/sessions`),
                 {
                   patientId: paciente.id,
                   timestamp: ts,
-                  dadosGrupos: normalizeGrupos(convertParsedGrupos(row.parsed, tipoElRow), tipoElRow),
-                  tipoEletrodo: tipoElRow,
-                  resumoSessao: '',
-                  notasLivres: row.evolution || '',
+                  dadosGrupos: convertParsedGrupos(row.parsed, row.tipoEletrodo),
+                  tipoEletrodo: row.tipoEletrodo || '4-ring',
+                  resumoSessao: row.evolution || '',
+                  notasLivres: '',
                   tendenciasEstimulacao: row.tendencias || '',
-                  clinica: { tremor: 0, rigidez: 0, bradicinesia: 0 },
+                  clinica: '',
                   type: 'active',
                   importadoViaExtrator: true,
                   voltagemBateria: row.voltagemBateria || '',
