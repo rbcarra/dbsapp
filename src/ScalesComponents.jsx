@@ -1,4 +1,24 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+
+// ─── PERSISTÊNCIA EM MEMÓRIA DAS ESCALAS (sobrevive a fechar/reabrir na sessão) ──
+// Store simples em nível de módulo. Zera ao recarregar a página (por design).
+// Pode ser limpo de fora via clearScaleStore() (ex.: troca de paciente).
+const _scaleStore = {};
+export const clearScaleStore = () => { for (const k in _scaleStore) delete _scaleStore[k]; };
+
+// Hook: como useState, mas guarda o valor em _scaleStore[key] entre montagens.
+const usePersistentState = (key, initial) => {
+  const [state, setState] = useState(() =>
+    (key in _scaleStore) ? _scaleStore[key] : (typeof initial === 'function' ? initial() : initial)
+  );
+  useEffect(() => { _scaleStore[key] = state; }, [key, state]);
+  const reset = () => {
+    const fresh = (typeof initial === 'function' ? initial() : initial);
+    delete _scaleStore[key];
+    setState(fresh);
+  };
+  return [state, setState, reset];
+};
 
 // ─── SHARED HELPERS ────────────────────────────────────────────────────────
 
@@ -30,7 +50,7 @@ const ItemRow = ({ id, name, max, value, onChange, labels, hint }) => (
   </div>
 );
 
-const ScaleShell = ({ title, subtitle, total, maxTotal, children, onInserir, onClose, resultText, color = 'teal' }) => (
+const ScaleShell = ({ title, subtitle, total, maxTotal, children, onInserir, onClose, resultText, color = 'teal', onLimpar }) => (
   <div className="bg-slate-50 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden"
     onClick={e => e.stopPropagation()}>
     <div className={`flex items-center justify-between px-5 py-3 bg-${color}-700 text-white rounded-t-2xl shrink-0`}>
@@ -50,6 +70,10 @@ const ScaleShell = ({ title, subtitle, total, maxTotal, children, onInserir, onC
       <div className="flex-1 font-mono text-[10px] text-slate-600 bg-slate-100 rounded px-2 py-1.5 overflow-x-auto whitespace-nowrap">
         {resultText}
       </div>
+      {onLimpar && (
+        <button onClick={onLimpar}
+          className="text-[10px] font-bold bg-slate-200 hover:bg-slate-300 text-slate-600 px-3 py-2 rounded-lg shrink-0">🗑 Limpar</button>
+      )}
       <button onClick={() => navigator.clipboard.writeText(resultText)}
         className="text-[10px] font-bold bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg shrink-0">📋</button>
       <button onClick={() => { onInserir(resultText); onClose(); }}
@@ -116,13 +140,13 @@ const genParkText = (scores) => {
 };
 
 const ExameParkinsoniano = ({ onClose, onInserir }) => {
-  const [scores, setScores] = useState(() => Object.fromEntries(PARK_ITEMS.map(it => [it.id, 0])));
+  const [scores, setScores, resetScores] = usePersistentState('park', () => Object.fromEntries(PARK_ITEMS.map(it => [it.id, 0])));
   const total = Object.values(scores).reduce((a, b) => a + b, 0);
   const resultText = genParkText(scores);
 
   return (
     <ScaleShell title="Exame Parkinsoniano Rápido" subtitle="Pontuação 0–4 em cada item" total={total} maxTotal={52}
-      onClose={onClose} onInserir={onInserir} resultText={resultText} color="indigo">
+      onClose={onClose} onInserir={onInserir} resultText={resultText} color="indigo" onLimpar={resetScores}>
       {PARK_ITEMS.map(it => (
         <ItemRow key={it.id} name={it.name} max={4} value={scores[it.id]}
           onChange={v => setScores(s => ({ ...s, [it.id]: v }))}
@@ -168,9 +192,9 @@ const calcBFM_MS = (sev, prov) => {
 };
 
 const BFMScale = ({ onClose, onInserir }) => {
-  const [sev,  setSev]  = useState(() => Object.fromEntries(BFM_REGIONS.map(r => [r.id, 0])));
-  const [prov, setProv] = useState(() => Object.fromEntries(BFM_REGIONS.map(r => [r.id, 0])));
-  const [ds,   setDs]   = useState(() => Object.fromEntries(BFM_DS_ITEMS.map(r => [r.id, 0])));
+  const [sev,  setSev,  resetSev]  = usePersistentState('bfm_sev',  () => Object.fromEntries(BFM_REGIONS.map(r => [r.id, 0])));
+  const [prov, setProv, resetProv] = usePersistentState('bfm_prov', () => Object.fromEntries(BFM_REGIONS.map(r => [r.id, 0])));
+  const [ds,   setDs,   resetDs]   = usePersistentState('bfm_ds',   () => Object.fromEntries(BFM_DS_ITEMS.map(r => [r.id, 0])));
 
   const ms = Math.round(calcBFM_MS(sev, prov) * 10) / 10;
   const dsTotal = Object.values(ds).reduce((a, b) => a + b, 0);
@@ -178,7 +202,7 @@ const BFMScale = ({ onClose, onInserir }) => {
 
   return (
     <ScaleShell title="BFM – Burke-Fahn-Marsden" subtitle="Escala de Movimento + Incapacidade" total={ms} maxTotal={120}
-      onClose={onClose} onInserir={onInserir} resultText={resultText} color="violet">
+      onClose={onClose} onInserir={onInserir} resultText={resultText} color="violet" onLimpar={() => { resetSev(); resetProv(); resetDs(); }}>
       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Escala de Movimento</p>
       {BFM_REGIONS.map(r => (
         <div key={r.id} className="bg-white border border-slate-200 rounded-lg p-2 mb-1.5">
@@ -251,14 +275,14 @@ const SARA_ITEMS = [
 ];
 
 const SARaScale = ({ onClose, onInserir }) => {
-  const [scores, setScores] = useState(() => Object.fromEntries(SARA_ITEMS.map(it => [it.id, 0])));
+  const [scores, setScores, resetScores] = usePersistentState('sara', () => Object.fromEntries(SARA_ITEMS.map(it => [it.id, 0])));
   const total = Object.values(scores).reduce((a, b) => a + b, 0);
   const details = SARA_ITEMS.map(it => `${it.id}:${scores[it.id]}`).join(' ');
   const resultText = `SARA total: ${total}/40 | ${details}`;
 
   return (
     <ScaleShell title="SARA – Scale for Assessment and Rating of Ataxia" subtitle="Total: 0–40" total={total} maxTotal={40}
-      onClose={onClose} onInserir={onInserir} resultText={resultText} color="cyan">
+      onClose={onClose} onInserir={onInserir} resultText={resultText} color="cyan" onLimpar={resetScores}>
       {SARA_ITEMS.map(it => (
         <ItemRow key={it.id} name={it.name} max={it.max} value={scores[it.id]}
           labels={it.labels}
@@ -289,7 +313,7 @@ const PDQ39Scale = ({ onClose, onInserir }) => {
     PDQ39_DIMS.forEach((d, di) => d.qs.forEach((_, qi) => { s[`${d.id}_${qi}`] = 0; }));
     return s;
   };
-  const [scores, setScores] = useState(initScores);
+  const [scores, setScores, resetScores] = usePersistentState('pdq39', initScores);
 
   const dimScores = PDQ39_DIMS.map(d => {
     const vals = d.qs.map((_, qi) => scores[`${d.id}_${qi}`] || 0);
@@ -303,7 +327,7 @@ const PDQ39Scale = ({ onClose, onInserir }) => {
 
   return (
     <ScaleShell title="PDQ-39 – Parkinson's Disease Questionnaire" subtitle="0=Nunca  4=Sempre/Sempre" total={summaryIndex} maxTotal={100}
-      onClose={onClose} onInserir={onInserir} resultText={resultText} color="emerald">
+      onClose={onClose} onInserir={onInserir} resultText={resultText} color="emerald" onLimpar={resetScores}>
       {PDQ39_DIMS.map((dim, di) => (
         <div key={dim.id} className="mb-3">
           <div className="flex items-center justify-between mb-1">
@@ -342,7 +366,7 @@ const PDQ8_ITEMS = [
 ];
 
 const PDQ8Scale = ({ onClose, onInserir }) => {
-  const [scores, setScores] = useState(() => Array(8).fill(0));
+  const [scores, setScores, resetScores] = usePersistentState('pdq8', () => Array(8).fill(0));
   const sum = scores.reduce((a, b) => a + b, 0);
   const index = Math.round((sum / 32) * 100);
   const details = scores.map((v, i) => `Q${i+1}:${v}`).join(' ');
@@ -350,7 +374,7 @@ const PDQ8Scale = ({ onClose, onInserir }) => {
 
   return (
     <ScaleShell title="PDQ-8 – Parkinson's Disease Questionnaire (versão curta)" subtitle="0=Nunca  4=Sempre" total={index} maxTotal={100}
-      onClose={onClose} onInserir={onInserir} resultText={resultText} color="emerald">
+      onClose={onClose} onInserir={onInserir} resultText={resultText} color="emerald" onLimpar={resetScores}>
       {PDQ8_ITEMS.map((q, i) => (
         <div key={i} className="bg-white border border-slate-200 rounded-lg p-2 mb-1">
           <p className="text-[10px] text-slate-600 mb-1.5">{i+1}. {q}</p>
@@ -378,9 +402,9 @@ const YGTSS_SUBSCALES = [
 ];
 
 const YGTSSScale = ({ onClose, onInserir }) => {
-  const [motor, setMotor] = useState(() => Object.fromEntries(YGTSS_SUBSCALES.map(s => [s.id, 0])));
-  const [phonic, setPhonic] = useState(() => Object.fromEntries(YGTSS_SUBSCALES.map(s => [s.id, 0])));
-  const [impair, setImpair] = useState(0);
+  const [motor, setMotor, resetMotor] = usePersistentState('ygtss_motor', () => Object.fromEntries(YGTSS_SUBSCALES.map(s => [s.id, 0])));
+  const [phonic, setPhonic, resetPhonic] = usePersistentState('ygtss_phonic', () => Object.fromEntries(YGTSS_SUBSCALES.map(s => [s.id, 0])));
+  const [impair, setImpair, resetImpair] = usePersistentState('ygtss_impair', 0);
 
   const motorTotal  = Object.values(motor).reduce((a, b) => a + b, 0);
   const phonicTotal = Object.values(phonic).reduce((a, b) => a + b, 0);
@@ -389,7 +413,7 @@ const YGTSSScale = ({ onClose, onInserir }) => {
 
   return (
     <ScaleShell title="YGTSS – Yale Global Tic Severity Scale" subtitle="Motor + Fônico + Comprometimento" total={total} maxTotal={100}
-      onClose={onClose} onInserir={onInserir} resultText={resultText} color="rose">
+      onClose={onClose} onInserir={onInserir} resultText={resultText} color="rose" onLimpar={() => { resetMotor(); resetPhonic(); resetImpair(); }}>
       <div className="grid grid-cols-2 gap-3">
         {[['Motor', motor, setMotor, 'blue'], ['Fônico', phonic, setPhonic, 'rose']].map(([label, scores, setScores, col]) => (
           <div key={label}>
@@ -433,13 +457,13 @@ const YGTSSScale = ({ onClose, onInserir }) => {
 // Shared reusable component for simple single-value scales
 
 const SimpleScoreScale = ({ title, subtitle, field, min, max, step=1, unit='', options, onClose, onInserir, color='slate' }) => {
-  const [val, setVal] = React.useState(options ? options[0].v : min);
+  const [val, setVal, resetVal] = usePersistentState('simple_' + (field || title), options ? options[0].v : min);
   const label = options ? (options.find(o=>o.v===val)?.label || '') : '';
   const resultText = `${title}: ${val}${unit}${label ? ' — '+label : ''}`;
   const pct = max > 0 ? Math.round(((val - min) / (max - min)) * 100) : 0;
   return (
     <ScaleShell title={title} subtitle={subtitle} total={val} maxTotal={max}
-      onClose={onClose} onInserir={onInserir} resultText={resultText} color={color}>
+      onClose={onClose} onInserir={onInserir} resultText={resultText} color={color} onLimpar={resetVal}>
       <div className="flex flex-col items-center gap-4 py-2">
         <div className={`text-5xl font-black text-${color}-600`}>{val}{unit}</div>
         {options ? (
@@ -553,13 +577,13 @@ const ESS_ITEMS = [
   {id:'car_drive',  name:'Em carro parado no trânsito',  max:3},
 ];
 const EpworthScale = ({ onClose, onInserir }) => {
-  const [s, setS] = React.useState(()=>Object.fromEntries(ESS_ITEMS.map(i=>[i.id,0])));
+  const [s, setS, resetS] = usePersistentState('epworth_ess', ()=>Object.fromEntries(ESS_ITEMS.map(i=>[i.id,0])));
   const total = Object.values(s).reduce((a,b)=>a+b,0);
   const level = total<=10?'Normal':total<=15?'Sonolência moderada':'Sonolência grave';
   const resultText = `Epworth: ${total}/24 — ${level}`;
   return (
     <ScaleShell title="Escala de Sonolência de Epworth" subtitle="0=Nunca adormeço  3=Alta chance" total={total} maxTotal={24}
-      onClose={onClose} onInserir={onInserir} resultText={resultText} color="amber">
+      onClose={onClose} onInserir={onInserir} resultText={resultText} color="amber" onLimpar={resetS}>
       <p className="text-[9px] text-slate-500 mb-2">Chance de adormecer nas situações abaixo:</p>
       <ItemScale items={ESS_ITEMS} scores={s} setScores={setS} colorCls="bg-amber-500 text-white border-amber-400" borderHover="hover:border-amber-300"/>
       <p className="text-xs font-bold text-center mt-2 text-amber-600">Total: {total}/24 — {level}</p>
@@ -583,12 +607,12 @@ const FOGQ_ITEMS = [
    hint:'0=nenhum, 1=1-2s, 2=3-10s, 3=11-30s, 4=>30s'},
 ];
 const FOGQScale = ({ onClose, onInserir }) => {
-  const [s, setS] = React.useState(()=>Object.fromEntries(FOGQ_ITEMS.map(i=>[i.id,0])));
+  const [s, setS, resetS] = usePersistentState('fogq', ()=>Object.fromEntries(FOGQ_ITEMS.map(i=>[i.id,0])));
   const total = Object.values(s).reduce((a,b)=>a+b,0);
   const resultText = `FOG-Q: ${total}/24`;
   return (
     <ScaleShell title="Freezing of Gait Questionnaire" subtitle="0–24 (maior = pior)" total={total} maxTotal={24}
-      onClose={onClose} onInserir={onInserir} resultText={resultText} color="slate">
+      onClose={onClose} onInserir={onInserir} resultText={resultText} color="slate" onLimpar={resetS}>
       <ItemScale items={FOGQ_ITEMS} scores={s} setScores={setS} colorCls="bg-slate-600 text-white border-slate-500" borderHover="hover:border-slate-400"/>
     </ScaleShell>
   );
@@ -613,12 +637,12 @@ const NMS_ITEMS = [
   {id:'s29',name:'Sangramento gastrointestinal',max:1},{id:'s30',name:'Alteração de sabor',max:1},
 ];
 const NMSQuestScale = ({ onClose, onInserir }) => {
-  const [s, setS] = React.useState(()=>Object.fromEntries(NMS_ITEMS.map(i=>[i.id,0])));
+  const [s, setS, resetS] = usePersistentState('nms', ()=>Object.fromEntries(NMS_ITEMS.map(i=>[i.id,0])));
   const total = Object.values(s).reduce((a,b)=>a+b,0);
   const resultText = `NMS-Quest: ${total}/30`;
   return (
     <ScaleShell title="Non-Motor Symptoms Questionnaire" subtitle="0=Ausente  1=Presente — total 0–30"
-      total={total} maxTotal={30} onClose={onClose} onInserir={onInserir} resultText={resultText} color="indigo">
+      total={total} maxTotal={30} onClose={onClose} onInserir={onInserir} resultText={resultText} color="indigo" onLimpar={resetS}>
       <div className="grid grid-cols-2 gap-1">
         {NMS_ITEMS.map(it=>(
           <button key={it.id} onClick={()=>setS(ss=>({...ss,[it.id]:ss[it.id]?0:1}))}
@@ -647,13 +671,13 @@ const BDI_ITEMS = [
   {id:'q21',name:'Interesse sexual',max:3},
 ];
 const BDIScale = ({ onClose, onInserir }) => {
-  const [s, setS] = React.useState(()=>Object.fromEntries(BDI_ITEMS.map(i=>[i.id,0])));
+  const [s, setS, resetS] = usePersistentState('bdi', ()=>Object.fromEntries(BDI_ITEMS.map(i=>[i.id,0])));
   const total = Object.values(s).reduce((a,b)=>a+b,0);
   const level = total<=13?'Mínima':total<=19?'Leve':total<=28?'Moderada':'Grave';
   const resultText = `BDI-II: ${total}/63 — ${level}`;
   return (
     <ScaleShell title="Beck Depression Inventory-II" subtitle="0–63 (≤13 mínima  14–19 leve  20–28 moderada  ≥29 grave)"
-      total={total} maxTotal={63} onClose={onClose} onInserir={onInserir} resultText={resultText} color="sky">
+      total={total} maxTotal={63} onClose={onClose} onInserir={onInserir} resultText={resultText} color="sky" onLimpar={resetS}>
       <ItemScale items={BDI_ITEMS} scores={s} setScores={setS} colorCls="bg-sky-600 text-white border-sky-400" borderHover="hover:border-sky-300"/>
       <p className="text-xs font-bold text-center mt-2 text-sky-600">Total: {total}/63 — {level}</p>
     </ScaleShell>
@@ -675,13 +699,13 @@ const MMSE_ITEMS = [
   {id:'copy',     name:'Cópia do pentágono', max:1},
 ];
 const MMSEScale = ({ onClose, onInserir }) => {
-  const [s, setS] = React.useState(()=>Object.fromEntries(MMSE_ITEMS.map(i=>[i.id,0])));
+  const [s, setS, resetS] = usePersistentState('mmse', ()=>Object.fromEntries(MMSE_ITEMS.map(i=>[i.id,0])));
   const total = Object.values(s).reduce((a,b)=>a+b,0);
   const level = total>=27?'Normal':total>=24?'Questionável':total>=19?'Déficit leve':total>=10?'Déficit moderado':'Déficit grave';
   const resultText = `MMSE: ${total}/30 — ${level}`;
   return (
     <ScaleShell title="Mini-Mental State Examination" subtitle="0–30 (≥27 normal  24–26 questionável  ≤23 déficit)"
-      total={total} maxTotal={30} onClose={onClose} onInserir={onInserir} resultText={resultText} color="violet">
+      total={total} maxTotal={30} onClose={onClose} onInserir={onInserir} resultText={resultText} color="violet" onLimpar={resetS}>
       <ItemScale items={MMSE_ITEMS} scores={s} setScores={setS} colorCls="bg-violet-600 text-white border-violet-400" borderHover="hover:border-violet-300"/>
       <p className="text-xs font-bold text-center mt-2 text-violet-600">Total: {total}/30 — {level}</p>
     </ScaleShell>
@@ -699,15 +723,15 @@ const MOCA_ITEMS = [
   {id:'orient',  name:'Orientação (data, mês, ano, dia, local, cidade)', max:6},
 ];
 const MoCAScale = ({ onClose, onInserir }) => {
-  const [s, setS] = React.useState(()=>Object.fromEntries(MOCA_ITEMS.map(i=>[i.id,0])));
-  const [edu, setEdu] = React.useState(false);
+  const [s, setS, resetS] = usePersistentState('moca', ()=>Object.fromEntries(MOCA_ITEMS.map(i=>[i.id,0])));
+  const [edu, setEdu, resetEdu] = usePersistentState('moca_edu', false);
   const raw = Object.values(s).reduce((a,b)=>a+b,0);
   const total = Math.min(30, raw + (edu?1:0));
   const level = total>=26?'Normal':total>=18?'Comprometimento leve':total>=10?'Comprometimento moderado':'Comprometimento grave';
   const resultText = `MoCA: ${total}/30 — ${level}`;
   return (
     <ScaleShell title="Montreal Cognitive Assessment" subtitle="0–30 (≥26 normal; +1 se ≤12 anos escolaridade)"
-      total={total} maxTotal={30} onClose={onClose} onInserir={onInserir} resultText={resultText} color="purple">
+      total={total} maxTotal={30} onClose={onClose} onInserir={onInserir} resultText={resultText} color="purple" onLimpar={() => { resetS(); resetEdu(); }}>
       <ItemScale items={MOCA_ITEMS} scores={s} setScores={setS} colorCls="bg-purple-600 text-white border-purple-400" borderHover="hover:border-purple-300"/>
       <label className="flex items-center gap-2 mt-2 cursor-pointer">
         <input type="checkbox" checked={edu} onChange={e=>setEdu(e.target.checked)} className="accent-purple-500"/>
@@ -742,9 +766,9 @@ const TWSTRS_PAIN_ITEMS = [
   {id:'incapacity',name:'Incapacidade por dor', max:5},
 ];
 const TWSTRSScale = ({ onClose, onInserir }) => {
-  const [sev,  setSev]  = React.useState(()=>Object.fromEntries(TWSTRS_SEVERITY_ITEMS.map(i=>[i.id,0])));
-  const [dis,  setDis]  = React.useState(()=>Object.fromEntries(TWSTRS_DISABILITY_ITEMS.map(i=>[i.id,0])));
-  const [pain, setPain] = React.useState(()=>Object.fromEntries(TWSTRS_PAIN_ITEMS.map(i=>[i.id,0])));
+  const [sev,  setSev,  resetSev]  = usePersistentState('twstrs_sev',  ()=>Object.fromEntries(TWSTRS_SEVERITY_ITEMS.map(i=>[i.id,0])));
+  const [dis,  setDis,  resetDis]  = usePersistentState('twstrs_dis',  ()=>Object.fromEntries(TWSTRS_DISABILITY_ITEMS.map(i=>[i.id,0])));
+  const [pain, setPain, resetPain] = usePersistentState('twstrs_pain', ()=>Object.fromEntries(TWSTRS_PAIN_ITEMS.map(i=>[i.id,0])));
   const totSev  = Object.values(sev).reduce((a,b)=>a+b,0);
   const totDis  = Object.values(dis).reduce((a,b)=>a+b,0);
   const totPain = Object.values(pain).reduce((a,b)=>a+b,0);
@@ -752,7 +776,7 @@ const TWSTRSScale = ({ onClose, onInserir }) => {
   const resultText = `TWSTRS: ${total}/87 | Gravidade:${totSev}/24 Incapacidade:${totDis}/28 Dor:${totPain}/15`;
   return (
     <ScaleShell title="TWSTRS — Torticolis Espasmódica" subtitle="Total 0–87 | Gravidade+Incapacidade+Dor"
-      total={total} maxTotal={87} onClose={onClose} onInserir={onInserir} resultText={resultText} color="orange">
+      total={total} maxTotal={87} onClose={onClose} onInserir={onInserir} resultText={resultText} color="orange" onLimpar={() => { resetSev(); resetDis(); resetPain(); }}>
       <p className="text-[9px] font-bold text-orange-600 uppercase tracking-wider mb-1">Gravidade — {totSev}/24</p>
       <ItemScale items={TWSTRS_SEVERITY_ITEMS} scores={sev} setScores={setSev} colorCls="bg-orange-500 text-white border-orange-400" borderHover="hover:border-orange-300"/>
       <p className="text-[9px] font-bold text-orange-600 uppercase tracking-wider mt-3 mb-1">Incapacidade — {totDis}/28</p>
@@ -787,12 +811,12 @@ const FTM_ITEMS = [
   {id:'face2', name:'Face — outros',            max:4},
 ];
 const FTMScale = ({ onClose, onInserir }) => {
-  const [s, setS] = React.useState(()=>Object.fromEntries(FTM_ITEMS.map(i=>[i.id,0])));
+  const [s, setS, resetS] = usePersistentState('ftm', ()=>Object.fromEntries(FTM_ITEMS.map(i=>[i.id,0])));
   const total = Object.values(s).reduce((a,b)=>a+b,0);
   const resultText = `FTM Tremor: ${total}/80`;
   return (
     <ScaleShell title="Fahn-Tolosa-Marín Tremor Rating Scale" subtitle="0–80 (subconjunto clínico)"
-      total={total} maxTotal={80} onClose={onClose} onInserir={onInserir} resultText={resultText} color="cyan">
+      total={total} maxTotal={80} onClose={onClose} onInserir={onInserir} resultText={resultText} color="cyan" onLimpar={resetS}>
       <ItemScale items={FTM_ITEMS} scores={s} setScores={setS} colorCls="bg-cyan-600 text-white border-cyan-400" borderHover="hover:border-cyan-300"/>
     </ScaleShell>
   );
@@ -800,12 +824,12 @@ const FTMScale = ({ onClose, onInserir }) => {
 
 // ─── 19. SF-36 (entrada simplificada de PCS e MCS) ────────────────────────────
 const SF36Scale = ({ onClose, onInserir }) => {
-  const [pcs, setPcs] = React.useState(50);
-  const [mcs, setMcs] = React.useState(50);
+  const [pcs, setPcs, resetPcs] = usePersistentState('sf36_pcs', 50);
+  const [mcs, setMcs, resetMcs] = usePersistentState('sf36_mcs', 50);
   const resultText = `SF-36 PCS: ${pcs.toFixed(1)} | MCS: ${mcs.toFixed(1)}`;
   return (
     <ScaleShell title="SF-36" subtitle="Physical (PCS) e Mental (MCS) Component Summary — 0–100"
-      total={Math.round((pcs+mcs)/2)} maxTotal={100} onClose={onClose} onInserir={onInserir} resultText={resultText} color="teal">
+      total={Math.round((pcs+mcs)/2)} maxTotal={100} onClose={onClose} onInserir={onInserir} resultText={resultText} color="teal" onLimpar={() => { resetPcs(); resetMcs(); }}>
       <p className="text-[9px] text-slate-400 mb-3">Insira os scores calculados externamente pelo algoritmo SF-36 (média populacional = 50).</p>
       {[['PCS — Componente Físico', pcs, setPcs],['MCS — Componente Mental', mcs, setMcs]].map(([label,val,setter])=>(
         <div key={label} className="mb-4">
@@ -830,14 +854,14 @@ const EQ5D_DIMS = [
   {id:'anxiety',   name:'Ansiedade / Depressão',opts:['Sem ansiedade','Ansiedade leve','Ansiedade moderada','Ansiedade grave','Ansiedade extrema']},
 ];
 const EQ5DScale = ({ onClose, onInserir }) => {
-  const [dims, setDims] = React.useState(()=>Object.fromEntries(EQ5D_DIMS.map(d=>[d.id,1])));
-  const [vas, setVas] = React.useState(75);
-  const [indexVal, setIndexVal] = React.useState('');
+  const [dims, setDims, resetDims] = usePersistentState('eq5d_dims', ()=>Object.fromEntries(EQ5D_DIMS.map(d=>[d.id,1])));
+  const [vas, setVas, resetVas] = usePersistentState('eq5d_vas', 75);
+  const [indexVal, setIndexVal, resetIndex] = usePersistentState('eq5d_index', '');
   const profile = EQ5D_DIMS.map(d=>dims[d.id]).join('');
   const resultText = `EQ-5D-5L: Perfil ${profile} | VAS: ${vas}${indexVal?` | Index: ${indexVal}`:''}`;
   return (
     <ScaleShell title="EQ-5D-5L" subtitle="5 dimensões (1–5) + VAS + índice"
-      total={vas} maxTotal={100} onClose={onClose} onInserir={onInserir} resultText={resultText} color="green">
+      total={vas} maxTotal={100} onClose={onClose} onInserir={onInserir} resultText={resultText} color="green" onLimpar={() => { resetDims(); resetVas(); resetIndex(); }}>
       {EQ5D_DIMS.map(d=>(
         <div key={d.id} className="mb-3">
           <p className="text-[9px] font-bold text-slate-600 mb-1">{d.name}</p>
@@ -971,7 +995,7 @@ const SIMPLE_SCALE_GROUPS = [
 ];
 
 const SimpleScalesScreen = ({ onClose, onInserir }) => {
-  const [values, setValues] = React.useState({});
+  const [values, setValues, resetValues] = usePersistentState('numericas', {});
   const [activeGroup, setActiveGroup] = React.useState('parkinson');
 
   const setVal = (key, val) => setValues(prev => ({...prev, [key]: val}));
@@ -1040,6 +1064,10 @@ const SimpleScalesScreen = ({ onClose, onInserir }) => {
         <button onClick={handleInserir}
           className="flex-1 py-2 rounded-xl font-bold text-sm bg-teal-600 hover:bg-teal-500 text-white transition-colors">
           Inserir nas notas
+        </button>
+        <button onClick={resetValues}
+          className="px-4 py-2 rounded-xl text-sm font-bold bg-slate-200 hover:bg-slate-300 text-slate-600 transition-colors">
+          🗑 Limpar
         </button>
         <button onClick={onClose}
           className="px-4 py-2 rounded-xl text-sm text-slate-500 hover:bg-slate-100 transition-colors">

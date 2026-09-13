@@ -11,7 +11,8 @@ import { RenderPrograma } from './ProgramComponents';
 import { TimelineHistorico } from './DisplayComponents';
 import { ExtractorModal } from './ExtractorComponents';
 import { UPDRSModal } from './UPDRSComponents';
-import { ScalesModal } from './ScalesComponents';
+import { MdsUpdrsModal } from './MdsUpdrsModal';
+import { ScalesModal, clearScaleStore } from './ScalesComponents';
 import { JSONImportModal } from './JSONImportModal';
 import { ProgrammingEditor } from './ProgrammingEditor';
 import { SessionSidebar } from './SessionSidebar';
@@ -156,6 +157,9 @@ export default function App() {
   const [showHistoricoText, setShowHistoricoText] = useState(false);
   const [showUPDRS, setShowUPDRS] = useState(false);
   const [showScales, setShowScales] = useState(false);
+  const [showMdsPart, setShowMdsPart] = useState(null); // 'I' | 'II' | 'IV' | null
+  // Persistência EM MEMÓRIA das escalas durante a sessão (zera ao recarregar página)
+  const [mdsScores, setMdsScores] = useState({ I: {}, II: {}, IV: {} });
   const [showJSONImport, setShowJSONImport] = useState(false);
   const [structuralMapL, setStructuralMapL] = useState(null);
   const [structuralMapR, setStructuralMapR] = useState(null);
@@ -271,6 +275,8 @@ export default function App() {
       setEfeitosColaterais({ L: [], R: [] });
       setNotasLivres("");
       setResumoSessao("");
+      setMdsScores({ I: {}, II: {}, IV: {} });
+      clearScaleStore();
       setEnderecoSalvo("");
       setPrescricoesSalvas({});
       setCustomDocs([]);
@@ -1715,10 +1721,22 @@ export default function App() {
                 title="Ver histórico completo de programação em texto">
                 📜 Histórico
               </button>
+              <button onClick={() => setShowMdsPart('I')}
+                className="text-[10px] font-bold bg-teal-600 hover:bg-teal-500 text-white px-2.5 py-1.5 rounded-lg transition-all">
+                MDS-UPDRS I
+              </button>
+              <button onClick={() => setShowMdsPart('II')}
+                className="text-[10px] font-bold bg-teal-600 hover:bg-teal-500 text-white px-2.5 py-1.5 rounded-lg transition-all">
+                MDS-UPDRS II
+              </button>
               <button onClick={() => setShowUPDRS(true)}
                 className="flex items-center gap-1.5 text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-3 py-1.5 rounded-lg font-bold transition-all border border-teal-200"
                 title="Abrir pontuação MDS-UPDRS Parte III">
                 📊 UPDRS-III
+              </button>
+              <button onClick={() => setShowMdsPart('IV')}
+                className="text-[10px] font-bold bg-teal-600 hover:bg-teal-500 text-white px-2.5 py-1.5 rounded-lg transition-all">
+                MDS-UPDRS IV
               </button>
               <button onClick={() => setShowScales(true)}
                 className="flex items-center gap-1.5 text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg font-bold transition-all border border-indigo-200"
@@ -2773,6 +2791,17 @@ export default function App() {
           onInserir={(text) => {
             setNotasLivres(prev => (prev ? prev + '\n\n' : '') + text);
           }}
+        />
+      )}
+
+      {/* MDS-UPDRS I / II / IV MODAL */}
+      {showMdsPart && (
+        <MdsUpdrsModal
+          parte={showMdsPart}
+          scores={mdsScores[showMdsPart] || {}}
+          onScoresChange={(newScores) => setMdsScores(prev => ({ ...prev, [showMdsPart]: newScores }))}
+          onInserir={(text) => setNotasLivres(prev => (prev ? prev + '\n\n' : '') + text)}
+          onClose={() => setShowMdsPart(null)}
         />
       )}
 
