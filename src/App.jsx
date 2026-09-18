@@ -470,7 +470,8 @@ export default function App() {
           type: 'active',
           tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao, transcricaoBruta, transcricaoOrganizada, logEventos,
           voltagemBateria, impedanciaL, impedanciaR,
-          marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao
+          marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao,
+          notasGrupos: sessions.find(s => s.id === editingSessionId)?.notasGrupos || {}
         };
         await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'sessions', editingSessionId), sessionData);
         setAutoSaveStatus('saved');
@@ -536,10 +537,11 @@ export default function App() {
       '--- EVOLUÇÃO ---',
       notasLivres || '(sem anotações)',
       '',
-      '--- PROGRAMAÇÃO REGISTRADA EM PRONTUÁRIO ONLINE: ---',
+      '--- PROGRAMAÇÃO ATUAL ---',
       voltagemBateria ? `Voltagem da bateria: ${voltagemBateria} V` : '',
       impedanciaL ? `Impedância Esquerdo: ${impedanciaL}` : '',
       impedanciaR ? `Impedância Direito: ${impedanciaR}` : '',
+      `Cycling: ${cyclingStr}`,
       '',
       programacaoTexto,
     ].filter(l => l !== undefined).join('\n').replace(/\n{3,}/g, '\n\n').trim();
@@ -939,7 +941,8 @@ export default function App() {
       type: 'active',
       tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
       voltagemBateria, impedanciaL, impedanciaR,
-      marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao
+      marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao,
+      notasGrupos: (editingSessionId && sessions.find(s => s.id === editingSessionId)?.notasGrupos) || {}
     };
 
     try {
@@ -1116,28 +1119,16 @@ export default function App() {
   };
 
   const handleCopiarUltimaSessao = () => {
+    // Copia SOMENTE a programação (contatos + parâmetros) da última sessão salva.
+    // Não altera notas, transcrições, clínica, nem cria/abre sessão.
+    // (Duplicar sessão completa é feito pelo botão "Duplicar" na barra lateral.)
     const ultimaAtiva = sessions.find(s => s.type === 'active');
-    if (ultimaAtiva) {
-      setTipoEletrodo(ultimaAtiva.tipoEletrodo || '4-ring');
-      try { setDadosGrupos(capPrograms(ultimaAtiva.dadosGrupos) || ultimaAtiva.dadosGrupos); }
-      catch(e) { console.error('Erro ao carregar ultima sessao:', e); }
-      setClinica(ultimaAtiva.clinica || { tremor: 0, rigidez: 0, bradicinesia: 0 });
-      setEfeitosColaterais(ultimaAtiva.efeitosColaterais || { L: [], R: [] });
-      setNotasLivres(ultimaAtiva.notasLivres || "");
-      setResumoSessao(ultimaAtiva.resumoSessao || "");
-      setTranscricaoBruta(ultimaAtiva.transcricaoBruta || "");
-      setTranscricaoOrganizada(ultimaAtiva.transcricaoOrganizada || "");
-      setLogEventos(ultimaAtiva.logEventos || "");
-      setVoltagemBateria(ultimaAtiva.voltagemBateria || "");
-      setImpedanciaL(ultimaAtiva.impedanciaL || "");
-      setImpedanciaR(ultimaAtiva.impedanciaR || "");
-      setMarcadoresClinicosL(ultimaAtiva.marcadoresClinicosL || []);
-      setMarcadoresClinicosR(ultimaAtiva.marcadoresClinicosR || []);
-      setEditingSessionId(null); 
-      showToast("Última sessão copiada com sucesso!");
-    } else {
-      showToast("Nenhuma sessão anterior encontrada.");
-    }
+    if (!ultimaAtiva) { showToast("Nenhuma sessão anterior encontrada."); return; }
+    setTipoEletrodo(ultimaAtiva.tipoEletrodo || '4-ring');
+    try {
+      setDadosGrupos(capPrograms(normalizeGrupos(ultimaAtiva.dadosGrupos, ultimaAtiva.tipoEletrodo || '4-ring')) || ultimaAtiva.dadosGrupos);
+    } catch(e) { console.error('Erro ao copiar programação:', e); showToast('Erro ao copiar programação.'); return; }
+    showToast("Programação da sessão anterior copiada!");
   };
   const copiarParaGrupo = (alvo) => {
     if (!alvo || alvo === grupoAtivo) return;
@@ -1217,6 +1208,33 @@ export default function App() {
       return (gd.L || []).some(p => (p.amp || 0) > 0) && (gd.R || []).some(p => (p.amp || 0) > 0);
     });
   }, [sessaoReferencia]);
+
+  // ── Notas de feedback por grupo (texto livre), salvas na sessão de referência ──
+  const [notasGrupos, setNotasGrupos] = useState({ A:'', B:'', C:'', D:'' });
+  const notasGruposTimer = React.useRef(null);
+  // Carrega as notas ao trocar a sessão de referência
+  useEffect(() => {
+    if (sessaoReferencia) {
+      setNotasGrupos({ A:'', B:'', C:'', D:'', ...(sessaoReferencia.notasGrupos || {}) });
+    } else {
+      setNotasGrupos({ A:'', B:'', C:'', D:'' });
+    }
+  }, [sessaoReferencia?.id]);
+  // Atualiza + salva (debounced) a nota de um grupo na sessão de referência
+  const handleNotaGrupo = (grupo, texto) => {
+    setNotasGrupos(prev => {
+      const next = { ...prev, [grupo]: texto };
+      const ref = sessaoReferencia;
+      if (notasGruposTimer.current) clearTimeout(notasGruposTimer.current);
+      notasGruposTimer.current = setTimeout(() => {
+        if (ref && user && activePatient) {
+          updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'sessions', ref.id), { notasGrupos: next })
+            .catch(e => console.error('Erro ao salvar nota de grupo:', e));
+        }
+      }, 1000);
+      return next;
+    });
+  };
 
   const handleEfeitoGrupo = async (grupo, efeito, textoEfeito) => {
     if (!user || !activePatient || !sessaoReferencia) return;
@@ -1347,6 +1365,7 @@ export default function App() {
       })),
       'EfeitosColateraisE', 'EfeitosColateraisD',
       'MarcadoresE', 'MarcadoresD',
+      'NotaGrupoA', 'NotaGrupoB', 'NotaGrupoC', 'NotaGrupoD',
       'NotasLivres'
     ];
 
@@ -1390,7 +1409,11 @@ export default function App() {
       const mToStr = (m) => `${m.config}|${m.tipo}|${m.amp}|${m.pw || ''}|${m.freq || ''}`;
       const marcE = (s.marcadoresClinicosL || []).map(mToStr).join(';');
       const marcD = (s.marcadoresClinicosR || []).map(mToStr).join(';');
-      row.push(ecL, ecR, marcE, marcD, (s.notasLivres || '').replace(/[\n,]/g, ' '));
+      const ng = s.notasGrupos || {};
+      row.push(ecL, ecR, marcE, marcD,
+        (ng.A || '').replace(/[\n,]/g, ' '), (ng.B || '').replace(/[\n,]/g, ' '),
+        (ng.C || '').replace(/[\n,]/g, ' '), (ng.D || '').replace(/[\n,]/g, ' '),
+        (s.notasLivres || '').replace(/[\n,]/g, ' '));
       return row;
     });
 
@@ -1513,6 +1536,10 @@ export default function App() {
 
           marcadoresClinicosL:    parseMarcStr(get('MarcadoresE')),
           marcadoresClinicosR:    parseMarcStr(get('MarcadoresD')),
+          notasGrupos: {
+            A: get('NotaGrupoA'), B: get('NotaGrupoB'),
+            C: get('NotaGrupoC'), D: get('NotaGrupoD'),
+          },
         });
         importadas++;
       } catch(e) { console.error(e); }
@@ -1736,12 +1763,12 @@ export default function App() {
             onChange={(e) => {
               setNotasLivres(e.target.value);
               e.target.style.height = 'auto';
-              e.target.style.height = Math.max(300, e.target.scrollHeight) + 'px';
+              e.target.style.height = Math.max(60, e.target.scrollHeight) + 'px';
             }}
             onFocus={(e) => { e.target.style.height = 'auto'; e.target.style.height = Math.max(60, e.target.scrollHeight) + 'px'; }}
             placeholder="Cole ou registre aqui a evolução do paciente..."
             rows={2}
-            style={{ minHeight: '300px', height: notasLivres ? 'auto' : '300px' }}
+            style={{ minHeight: '60px', height: notasLivres ? 'auto' : '60px' }}
             className="w-full p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none text-slate-700 leading-relaxed overflow-hidden"
           />
           <div className="flex items-center justify-between mt-2">
@@ -1914,6 +1941,13 @@ export default function App() {
                             ))}
                           </div>
                         )}
+                        <input
+                          type="text"
+                          value={notasGrupos[grupo] || ''}
+                          onChange={e => handleNotaGrupo(grupo, e.target.value)}
+                          placeholder="Nota do grupo…"
+                          className="mt-1.5 w-full sm:w-56 text-[10px] bg-white border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-400 placeholder-slate-400"
+                        />
                       </div>
                       <pre className="text-[10px] font-mono text-slate-500 leading-relaxed whitespace-pre-wrap flex-1 pl-0 sm:pl-3 sm:border-l border-slate-200">
                         {linhasGrupo.join('\n')}
@@ -2033,6 +2067,13 @@ export default function App() {
                             ))}
                           </div>
                         )}
+                        <input
+                          type="text"
+                          value={notasGrupos[grupo] || ''}
+                          onChange={e => handleNotaGrupo(grupo, e.target.value)}
+                          placeholder="Nota do grupo…"
+                          className="mt-1.5 w-full sm:w-56 text-[10px] bg-white border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-400 placeholder-slate-400"
+                        />
                       </div>
                       <pre className="text-[10px] font-mono text-slate-500 leading-relaxed whitespace-pre-wrap flex-1 pl-0 sm:pl-3 sm:border-l border-slate-200">
                         {linhasGrupo.join('\n')}
@@ -2718,7 +2759,9 @@ export default function App() {
                   : efeito === 'pouco' ? '△ pouco'
                   : efeitoTexto ? `✗ ${efeitoTexto}` : '✗ ruim'}]`
               : '';
-            txt += `Grupo ${g}${efeitoLabel}:\n`;
+            const notaGrupo = sess.notasGrupos?.[g];
+            const notaLabel = notaGrupo ? ` — ${notaGrupo}` : '';
+            txt += `Grupo ${g}${efeitoLabel}${notaLabel}:\n`;
             ['L','R'].forEach(lado => {
               const leadStr = lado === 'L' ? 'E' : 'D';
               (grupo[lado] || []).forEach((prog, idx) => {
