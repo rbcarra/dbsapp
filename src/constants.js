@@ -14,17 +14,17 @@
 
 const ELETRODOS_SPEC = {
   '4-ring': {
-    label: '4 anéis',
+    label: '4 Contatos',
     descricao: 'Medtronic 3387/3389 · Abbott 6146',
     niveis: ['ring', 'ring', 'ring', 'ring'],
   },
   '8-ring': {
-    label: '8 anéis',
+    label: '8 Contatos',
     descricao: 'Boston Vercise Standard',
     niveis: ['ring', 'ring', 'ring', 'ring', 'ring', 'ring', 'ring', 'ring'],
   },
   'directional': {
-    label: 'Direcional 1-3-3-1',
+    label: 'Cartesia (direcional 1-3-3-1)',
     descricao: 'Boston Cartesia · Medtronic SenSight · Abbott Infinity',
     niveis: ['ring', 'dir', 'dir', 'ring'],
   },
