@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { MARCADOR_LETRAS, opacidadeMarcador, formatarData, getEfeitoCor, getEletrodo as getEletrodoDisplay } from './constants';
-import { estimarVTA, contornoLongitudinal, pitchDoEletrodo, nNiveisDoEletrodo, LEAD_R_MM, CONTACT_H_MM, E_LIMIAR_60US, FATOR_ANODO_PADRAO } from './vtaModel';
+import { estimarVTA, estimarVTA3Planos, pontoMaxLongitudinal, contornoLongitudinal, pitchDoEletrodo, nNiveisDoEletrodo, LEAD_R_MM, CONTACT_H_MM, E_LIMIAR_60US, FATOR_ANODO_PADRAO } from './vtaModel';
 import { DIR_ANGLES, parseConfigToContatos, classifyStim, getDirLevel,
   dirUnitVector2D, calcAmpEfetiva, dirVector3D } from './vectorHelpers';
 
@@ -246,7 +246,11 @@ const DirectionalHistorico = ({ marcadores, historicoRef, maxAmp, sessaoAtualTim
   );
 };
 
-const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq, marcadoresRing, anteriorContact = 'A', onOpenFullscreen, forcedSize }) => {
+// Visão "3D": VTA (modelo de campo elétrico) em 3 planos — axial, frente e lado —
+// do programa atual, com as programações prévias sobrepostas como contornos
+// na cor do efeito e os marcadores de limiar na borda da VTA de cada um.
+const TripleView3D = ({ marcadores, historicoRef, sessaoAtualTimestamp, programaContatos, ampAtual, agruparPorFreq, marcadoresRing, anteriorContact = 'A', onOpenFullscreen, forcedSize,
+                        tipoEletrodo = 'directional', pwAtual, modoContato, modoAmplitude, impedancia }) => {
   const [isZoomed, setIsZoomed] = React.useState(false);
   const [mostrarRing, setMostrarRing] = React.useState(true);
   const [mostrarSingleDir, setMostrarSingleDir] = React.useState(true);
@@ -263,21 +267,6 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
 
   // Fix 2: maxAmp from actual data, not slider max
   const allRing = marcadoresRing || [];
-  const calcZCenter = (contatos) => {
-    if (!contatos) return 1.5;
-    let zSum = 0, wSum = 0;
-    Object.entries(contatos).forEach(([k, v]) => {
-      if (v.state === 'off') return;
-      const perc = (v.perc ?? 100) / 100;
-      const z = parseInt(k[0]);
-      if (isNaN(z)) return; // skip non-numeric keys
-      zSum += perc * z;
-      wSum += perc;
-    });
-    const result = wSum > 0 ? zSum / wSum : 1.5;
-    return isFinite(result) ? result : 1.5;
-  };
-
   // Fix 1: similar filter based on programaContatos level
   const currentLevel = programaContatos
     ? [...new Set(Object.keys(programaContatos).filter(k => programaContatos[k].state !== 'off' && /[ABC]$/.test(k)).map(k => k[0]))]
@@ -295,11 +284,11 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
     if (!m || !m.config) return 'ring';
     const cache = ringClassCacheRef.current;
     if (!cache.has(m.config)) {
-      try { cache.set(m.config, classifyStim(parseConfigToContatos(m.config), 'directional')); }
+      try { cache.set(m.config, classifyStim(parseConfigToContatos(m.config), tipoEletrodo)); }
       catch(e) { cache.set(m.config, 'ring'); }
     }
     return cache.get(m.config);
-  }, []);
+  }, [tipoEletrodo]);
   const marcadoresSingleDirExtras = mostrarSingleDir ? allRing.filter(m => getStimType(m) === 'single-dir') : [];
   const marcadoresRingExtras = mostrarRing ? allRing.filter(m => {
     const st = getStimType(m);
@@ -336,51 +325,70 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
     }
   });
 
-  // Fix 2: compute effective maxAmp from all visible data
-  // Avoid Math.max(...hugeArray) stack overflow — use reduce instead
-  let maxAmp = Math.max(maxAmpProp || 0, ampAtual || 0, 1);
-  for (const m of marcadores) if ((m.amp || 0) > maxAmp) maxAmp = m.amp;
-  for (const m of allRing) if ((m.amp || 0) > maxAmp) maxAmp = m.amp;
-  for (const h of (historicoRef || [])) if ((h.amp || 0) > maxAmp) maxAmp = h.amp;
+  // ── Modelo de VTA (mesmo da aba VTA): cada programação vira contornos
+  //    |E| ≥ limiar em 3 planos — axial, frente (lateral) e lado (AP).
+  const anteriorRad = anteriorAngle * Math.PI / 180;
+  const angAP  = anteriorRad;                   // lado: anterior → direita
+  const angLat = anteriorRad + Math.PI / 2;     // frente: eixo lateral
+  const xyTheta = -Math.PI / 2 - anteriorRad;   // axial: anterior → embaixo
+  const rotXY = (ux, uy) => ({
+    rx: ux * Math.cos(xyTheta) - uy * Math.sin(xyTheta),
+    ry: ux * Math.sin(xyTheta) + uy * Math.cos(xyTheta),
+  });
+  const imp = Number(impedancia) || 0;
+  const opcoesVTA = { eLimiar60: E_LIMIAR_60US, fatorAnodo: FATOR_ANODO_PADRAO, angLat, angAP };
+  const vtaDeConfig = (config, amp, pwItem) => {
+    if (!config || !(amp > 0)) return null;
+    const pwi = pwItem || pwAtual || 60;
+    return estimarVTA3Planos(
+      { contatos: parseConfigToContatos(config), amp, pw: pwi, modoContato: 'perc', tipoEletrodo, modoAmplitude, impedanciaOhm: imp },
+      { ...opcoesVTA, chave: `${config}|${amp}|${pwi}|${tipoEletrodo}|${modoAmplitude}|${imp}` });
+  };
+  const vtaAtual = (programaContatos && ampAtual > 0)
+    ? estimarVTA3Planos(
+        { contatos: programaContatos, amp: ampAtual, pw: pwAtual || 60, modoContato, tipoEletrodo, modoAmplitude, impedanciaOhm: imp },
+        { ...opcoesVTA, detalhe: 'fino' })
+    : null;
 
-  const toR = (amp) => (Math.min(Math.max(amp, 0), maxAmp) / maxAmp) * R;
+  // Escala em mm: alcance máximo entre tudo que será desenhado (mín. 3 mm)
+  let maxMm = 3;
+  const considerar = (v) => { if (v && v.resumo.rMax > maxMm) maxMm = v.resumo.rMax; };
+  considerar(vtaAtual);
+  for (const m of [...marcadores, ...allRing]) considerar(vtaDeConfig(m.config, m.amp, m.pw));
+  for (const h of (historicoRef || []).slice(0, 60)) considerar(vtaDeConfig(h.config, h.amp, h.pw));
+  maxMm = Math.min(7, Math.ceil(maxMm + 0.25));
+  const pxPorMm = R / maxMm;
   const rings = [];
-  for (let v = 1; v <= Math.ceil(maxAmp); v++) rings.push(v);
+  for (let v = 1; v <= maxMm; v++) rings.push(v);
 
-  const zOriginVal = programaContatos ? calcZCenter(programaContatos) : 1.5;
-  // Fix 2: zToSvg uses R which is now scaled to actual maxAmp — electrode stays proportional
-  const zScale = R * 0.45; // each z-unit = 45% of R
-  const zToSvg = (zVal) => C - (zVal - zOriginVal) * zScale;
-  const zOriginSvg = zToSvg(zOriginVal);
+  // Referência vertical das vistas longitudinais: z do cátodo do programa atual
+  const pitch = pitchDoEletrodo(tipoEletrodo);
+  const elDesenho = getEletrodoDisplay(tipoEletrodo);
+  const zRef = vtaAtual ? vtaAtual.z : ((elDesenho.nNiveis - 1) * pitch) / 2;
+  const zToSvg = (z) => C - (z - zRef) * pxPorMm;
+  const mmToX = (x) => C + x * pxPorMm;
 
-  const allKeys = [...new Set([
-    ...Object.keys(byGroup),
-    ...marcadoresRingExtras.map(m => String(agruparPorFreq ? (m.freq || 130) : (m.pw || 60))),
-    ...Object.keys(histByGroup3D)
-  ])].sort((a, b) => +a - +b)
-    .slice(0, 8); // cap at 8 groups to prevent render explosion
-  allKeys.forEach(k => { if (!byGroup[k]) byGroup[k] = { multiDir: [], singleDir: [] }; });
-
-  const curVec = programaContatos ? dirVector3D(programaContatos, ampAtual || 0) : null;
   const labelPrefix = agruparPorFreq ? 'Hz' : 'µs';
 
-  // Bug 1: electrode centered at origin (C, zOriginSvg)
-  const ElectrodeSchematic = ({ highlightLevels }) => {
-    const elecX = C; // centered horizontally
+  // Eletrodo em escala real (vistas longitudinais)
+  const ElectrodeSchematic = () => {
+    const w = LEAD_R_MM * pxPorMm;
+    const zTop = (elDesenho.nNiveis - 1) * pitch + 8, zBot = -2;
     return (
       <g>
-        <line x1={elecX} y1={zToSvg(3) - 4} x2={elecX} y2={zToSvg(0) + 4}
-          stroke="#334155" strokeWidth={3}/>
-        {[3, 2, 1, 0].map(lv => {
-          const y = zToSvg(lv);
-          const hl = highlightLevels?.includes(String(lv));
+        <rect x={C - w} y={zToSvg(zTop)} width={2 * w} height={(zTop - zBot) * pxPorMm}
+          fill="#e2e8f0" stroke="#94a3b8" strokeWidth={0.4 / tvEz}/>
+        {elDesenho.niveis.map(n => {
+          const estados = n.contatos.map(k => programaContatos?.[k]?.state || 'off');
+          const st = estados.includes('-') ? '-' : estados.includes('+') ? '+' : 'off';
+          const fill = st === '-' ? '#06b6d4' : st === '+' ? '#f43f5e' : '#94a3b8';
+          const y = zToSvg(n.idx * pitch + CONTACT_H_MM / 2);
           return (
-            <g key={lv}>
-              <rect x={elecX - 5} y={y - 4} width={10} height={8} rx={2}
-                fill={hl ? '#2563eb' : (lv === 1 || lv === 2 ? '#475569' : '#94a3b8')}
-                stroke={hl ? '#93c5fd' : '#cbd5e1'} strokeWidth={0.5}/>
-              <text x={elecX + 8} y={y + 1} textAnchor="start"
-                fontSize={Math.max(5, S * 0.04)} fill={hl ? '#2563eb' : '#94a3b8'}>{lv}</text>
+            <g key={n.idx}>
+              <rect x={C - w} y={y} width={2 * w} height={CONTACT_H_MM * pxPorMm}
+                fill={fill} stroke="#475569" strokeWidth={0.4 / tvEz} rx={1 / tvEz}/>
+              <text x={C + w + 2 / tvEz} y={y + CONTACT_H_MM * pxPorMm / 2} dominantBaseline="middle"
+                fontSize={Math.max(5, S * 0.038) / tvEz} fill="#64748b">{n.tipo === 'dir' ? `${n.idx}ABC` : n.idx}</text>
             </g>
           );
         })}
@@ -408,215 +416,170 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
   };
   const onTvPointerUp = () => { tvPanRef.current = null; };
 
-  // Rotation from contact-anterior selection
-  const anteriorRad = anteriorAngle * Math.PI / 180;
-  // θ for XY: rotate so anterior points to SVG bottom (= math -Y direction)
-  const xyTheta = -Math.PI / 2 - anteriorRad;
-  const rotXY = (ux, uy) => ({
-    rx: ux * Math.cos(xyTheta) - uy * Math.sin(xyTheta),
-    ry: ux * Math.sin(xyTheta) + uy * Math.cos(xyTheta),
-  });
-
-  // XZ frente: looking from anterior direction → horizontal = lateral to AP
-  // px = component perpendicular to anterior (lateral), py = Z
-  const getXZ = (v) => ({
-    px: -v.ux * Math.sin(anteriorRad) + v.uy * Math.cos(anteriorRad),
-    py: v.uz,
-  });
-  // YZ lado: anterior=right, posterior=left → px = AP component, py = Z
-  const getYZ = (v) => ({
-    px: v.ux * Math.cos(anteriorRad) + v.uy * Math.sin(anteriorRad),
-    py: v.uz,
-  });
-
-  // Per-contact label positions using rotation
-  const xzDirLabels = Object.entries(DIR_ANGLES).map(([lt, deg]) => {
-    const r = deg * Math.PI / 180;
-    // lateral component of this contact direction relative to AP axis
-    const lx = -Math.cos(r) * Math.sin(anteriorRad) + Math.sin(r) * Math.cos(anteriorRad);
-    return { letter: lt, lx, ly: 0 };
-  });
-  const yzDirLabels = Object.entries(DIR_ANGLES).map(([lt, deg]) => {
-    const r = deg * Math.PI / 180;
-    // AP component of this contact
-    const lx = Math.cos(r) * Math.cos(anteriorRad) + Math.sin(r) * Math.sin(anteriorRad);
-    return { letter: lt, lx, ly: 0 };
-  });
-
   const anteriorLabel = anteriorContact;
   const posteriorLabel = { 'A':'B/C','AB':'BC','B':'C/A','BC':'CA','C':'A/B','CA':'AB' }[anteriorContact] || 'Post';
+  // rótulos dos segmentos A/B/C em cada vista
+  const dirLabelsXY = Object.entries(DIR_ANGLES).map(([lt, deg]) => {
+    const r = deg * Math.PI / 180; const { rx, ry } = rotXY(Math.cos(r), Math.sin(r));
+    return { letter: lt, lx: rx, ly: ry };
+  });
+  const dirLabelsLong = (ang) => Object.entries(DIR_ANGLES).map(([lt, deg]) => {
+    const r = deg * Math.PI / 180;
+    return { letter: lt, lx: Math.cos(r - ang), ly: 0.88 };   // projeção no eixo horizontal da vista
+  });
+  const comSegmentos = elDesenho.temDirecional;
 
   const projections = [
-    { label: 'XY · axial', showSchematic: false,
-      getXY: v => { const {rx,ry} = rotXY(v.ux, v.uy); return { px: rx, py: ry }; },
-      dirLabels: Object.entries(DIR_ANGLES).map(([lt, deg]) => {
-        const r = deg * Math.PI / 180;
-        const {rx,ry} = rotXY(Math.cos(r), Math.sin(r));
-        return { letter: lt, lx: rx, ly: ry };
-      }),
-      bottomLabel: anteriorLabel,
-    },
-    { label: `XZ · frente (→${anteriorLabel})`, showSchematic: true, getXY: getXZ,
-      dirLabels: xzDirLabels,
-      extraLabels: [{ letter: anteriorLabel, lx: 0.95, ly: 0, color: '#64748b', size: 0.04 },
-                    { letter: posteriorLabel, lx: -0.85, ly: 0, color: '#94a3b8', size: 0.035 }],
-    },
-    { label: `YZ · lado (Post←→${anteriorLabel})`, showSchematic: true, getXY: getYZ,
-      dirLabels: yzDirLabels,
-    },
+    { id: 'axial', label: 'XY · axial', longitudinal: false, dirLabels: dirLabelsXY },
+    { id: 'lat',   label: `XZ · frente (→${anteriorLabel}+90°)`, longitudinal: true, dirLabels: dirLabelsLong(angLat) },
+    { id: 'ap',    label: `YZ · lado (${posteriorLabel}←→${anteriorLabel})`, longitudinal: true, dirLabels: dirLabelsLong(angAP) },
   ];
 
-  // Helper: for each marker/item, compute its own Z-origin in SVG coords for XZ/YZ views
-  // This allows each point to emanate from its actual charge-center height on the electrode
-  const itemOriginY = (config, isZView) => {
-    if (!isZView) return C;
-    const contatos = parseConfigToContatos(config);
-    const zc = calcZCenter(contatos);
-    const y = zToSvg(isFinite(zc) ? zc : 1.5);
-    return isFinite(y) ? y : C;
+  // Contorno → path SVG, conforme a vista
+  const pathAxial = (axial) => axial.map(({ ang, r }, i) => {
+    const { rx, ry } = rotXY(Math.cos(ang), Math.sin(ang));
+    const rr = Math.max(r, LEAD_R_MM) * pxPorMm;
+    return `${i ? 'L' : 'M'}${(C + rx * rr).toFixed(1)},${(C - ry * rr).toFixed(1)}`;
+  }).join(' ') + ' Z';
+  const pathLong = (faixas) => faixas.map(f => {
+    const dir = f.map(p => `${mmToX(p.rPos).toFixed(1)},${zToSvg(p.z).toFixed(1)}`);
+    const esq = [...f].reverse().map(p => `${mmToX(-p.rNeg).toFixed(1)},${zToSvg(p.z).toFixed(1)}`);
+    return `M${dir.join(' L')} L${esq.join(' L')} Z`;
+  }).join(' ');
+  const pathDe = (v, id) => !v ? null : id === 'axial' ? pathAxial(v.axial) : pathLong(v[id]);
+
+  // Ponto de limiar de um marcador na vista: borda da VTA do seu programa,
+  // na direção de maior alcance (simétrico no axial → círculo)
+  const pontoMarcador = (v, id) => {
+    if (!v) return null;
+    if (id === 'axial') {
+      if (v.resumo.aniso <= 1.08) return { circulo: v.resumo.rMax * pxPorMm };
+      const { rx, ry } = rotXY(Math.cos(v.resumo.angMax), Math.sin(v.resumo.angMax));
+      const rr = v.resumo.rMax * pxPorMm;
+      return { x: C + rx * rr, y: C - ry * rr };
+    }
+    const p = pontoMaxLongitudinal(v[id]);
+    return p ? { x: mmToX(p.x), y: zToSvg(p.z) } : null;
   };
 
-  const renderOneSVG = (grpKey, { multiDir, singleDir }, histItems, showSchematic, getXY, dirLabels) => {
-    const allLevels = [...new Set([...multiDir, ...singleDir].flatMap(m =>
-      Object.keys(parseConfigToContatos(m.config)).map(k => k[0])))];
+  const allKeys = [...new Set([
+    ...Object.keys(byGroup),
+    ...marcadoresRingExtras.map(m => String(agruparPorFreq ? (m.freq || 130) : (m.pw || 60))),
+    ...Object.keys(histByGroup3D)
+  ])].sort((a, b) => +a - +b)
+    .slice(0, 8); // cap at 8 groups to prevent render explosion
+  allKeys.forEach(k => { if (!byGroup[k]) byGroup[k] = { multiDir: [], singleDir: [] }; });
+
+  const renderOneSVG = (grpKey, { multiDir, singleDir }, histItems, id, longitudinal, dirLabels) => {
     const ringMks = marcadoresRingExtras.filter(m =>
       String(agruparPorFreq ? (m.freq || 130) : (m.pw || 60)) === grpKey);
+    const fs = Math.max(5, S * 0.04) / tvEz;
 
-    // Global origin = current program's charge center (for electrode, rings, stim line)
-    const originX = C;
-    const originY = showSchematic ? zOriginSvg : C;
+    const desenharMarcador = (m, mi, tipoMk) => {
+      const v = vtaDeConfig(m.config, m.amp, m.pw);
+      const pt = pontoMarcador(v, id);
+      if (!pt) return null;
+      const isPos = ['tremor', 'rigidez', 'bradicinesia'].includes(m.tipo);
+      const info = MARCADOR_LETRAS[m.tipo] || { letra: '?' };
+      const fill = isPos ? '#059669' : '#e11d48';
+      const opacity = Math.max(0.4, opacidadeMarcador(m.sessionTimestamp || m.timestamp || 0, sessaoAtualTimestamp || Date.now()));
+      const titulo = `${m.tipo} | ${m.config} | ${m.amp}mA | ${m.pw || '?'}µs | alcance ${v.resumo.rMax.toFixed(1)}mm`;
+      if (pt.circulo) {
+        return (
+          <g key={`${tipoMk}-${mi}`} opacity={opacity * 0.8}>
+            <title>{titulo}</title>
+            <circle cx={C} cy={C} r={pt.circulo} fill="none" stroke={fill} strokeWidth={1 / tvEz} strokeDasharray="2,2"/>
+            <text x={C + pt.circulo * 0.707 + 2 / tvEz} y={C - pt.circulo * 0.707} textAnchor="middle"
+              fontSize={fs} fill={fill} fontWeight="bold">{info.letra}</text>
+          </g>
+        );
+      }
+      const mr = Math.max(3.5, S * 0.03) / tvEz;
+      return (
+        <g key={`${tipoMk}-${mi}`} opacity={tipoMk === 'md' ? opacity : opacity * 0.75}>
+          <title>{titulo}</title>
+          <circle cx={pt.x} cy={pt.y} r={mr} fill={fill} fillOpacity={0.3} stroke={fill} strokeWidth={1.2 / tvEz}
+            strokeDasharray={tipoMk === 'md' ? undefined : '1,1'}/>
+          <text x={pt.x} y={pt.y} textAnchor="middle" dominantBaseline="middle"
+            fontSize={Math.max(5, S * 0.04) / tvEz} fill="#fff" fontWeight="bold" stroke={fill} strokeWidth={0.3}>{info.letra}</text>
+        </g>
+      );
+    };
+
+    const yEixo = longitudinal ? zToSvg(zRef) : C;
 
     return (
-      <svg key={`${grpKey}-${showSchematic}`} width={S} height={S} viewBox={tvVB}
+      <svg key={`${grpKey}-${id}`} width={S} height={S} viewBox={tvVB}
         onPointerDown={tvZoom > 1 ? onTvPointerDown : undefined}
         onPointerMove={tvZoom > 1 ? onTvPointerMove : undefined}
         onPointerUp={tvZoom > 1 ? onTvPointerUp : undefined}
         style={{ cursor: tvZoom > 1 ? 'grab' : 'default' }}>
-        <rect width={S} height={S} fill="#ffffff" rx="6"/>
-        {/* Grid rings centered on current program origin */}
-        {rings.map(v => (
-          <circle key={v} cx={C} cy={originY} r={toR(v)} fill="none"
-            stroke={v === Math.ceil(maxAmp) ? '#475569' : '#e2e8f0'}
-            strokeWidth={(v === Math.ceil(maxAmp) ? 1.5 : 0.5) / tvEz}
-            strokeDasharray={v < maxAmp ? '2,2' : undefined}/>
+        <rect x={tvVpX} y={tvVpY} width={tvVpW} height={tvVpH} fill="#ffffff" rx="6"/>
+        {/* Grade em mm: círculos no axial, linhas verticais nas longitudinais */}
+        {!longitudinal ? rings.map(v => (
+          <g key={v}>
+            <circle cx={C} cy={C} r={v * pxPorMm} fill="none"
+              stroke={v === maxMm ? '#94a3b8' : '#e2e8f0'} strokeWidth={(v === maxMm ? 1 : 0.5) / tvEz}
+              strokeDasharray={v < maxMm ? '2,2' : undefined}/>
+            <text x={C + v * pxPorMm + 1 / tvEz} y={C - 1 / tvEz} fontSize={fs * 0.8} fill="#94a3b8">{v}</text>
+          </g>
+        )) : rings.map(v => (
+          <g key={v}>
+            {[-1, 1].map(sg => (
+              <line key={sg} x1={mmToX(sg * v)} y1={tvVpY} x2={mmToX(sg * v)} y2={tvVpY + tvVpH}
+                stroke="#e2e8f0" strokeWidth={0.5 / tvEz} strokeDasharray="2,2"/>
+            ))}
+            <text x={mmToX(v) + 1 / tvEz} y={C + R - 1} fontSize={fs * 0.8} fill="#94a3b8">{v}</text>
+          </g>
         ))}
-        <line x1={margin} y1={originY} x2={S - margin} y2={originY} stroke="#e2e8f0" strokeWidth={0.5/tvEz}/>
-        <line x1={C} y1={margin} x2={C} y2={S - margin} stroke="#e2e8f0" strokeWidth={0.5/tvEz}/>
-        {dirLabels.map(({ letter, lx, ly }) => {
-          const labelR = toR(Math.ceil(maxAmp)) + S * 0.07;
-          return <text key={letter} x={C + lx * labelR} y={originY - ly * labelR}
+        <line x1={margin} y1={yEixo} x2={S - margin} y2={yEixo} stroke="#e2e8f0" strokeWidth={0.5 / tvEz}/>
+        {!longitudinal && <line x1={C} y1={margin} x2={C} y2={S - margin} stroke="#e2e8f0" strokeWidth={0.5 / tvEz}/>}
+        {comSegmentos && dirLabels.map(({ letter, lx, ly }) => {
+          const labelR = R + S * 0.06;
+          return <text key={letter} x={C + lx * labelR} y={longitudinal ? C - ly * R + 2 : C - ly * labelR}
             textAnchor="middle" dominantBaseline="middle"
-            fontSize={Math.max(7, S * 0.055)} fontWeight="bold" fill="#1e293b">{letter}</text>;
+            fontSize={Math.max(7, S * 0.05) / tvEz} fontWeight="bold" fill={longitudinal ? '#94a3b8' : '#1e293b'}>{letter}</text>;
         })}
-        {showSchematic && <ElectrodeSchematic highlightLevels={allLevels}/>}
-        {/* Current stim line from its own origin */}
-        {curVec && isFinite(curVec.ux) && (() => {
-          const { px: cux, py: cuy } = getXY(curVec);
-          const cr = toR(curVec.amp || 0);
-          if (!isFinite(cux) || cr <= 0) return null;
-          return <line x1={originX} y1={originY}
-            x2={originX + cux * cr} y2={originY - cuy * cr}
-            stroke="#6366f1" strokeWidth={2/tvEz} strokeDasharray="4,3" opacity={0.5}/>;
-        })()}
-        <circle cx={originX} cy={originY} r={Math.max(2, S * 0.015) / tvEz} fill="#334155"/>
-        {/* Ring markers: concentric rings — centered on marker's own Z-origin */}
-        {ringMks.filter(m => filterMarcador(m, false)).map((m, mi) => {
-          const mOY = itemOriginY(m.config, showSchematic);
-          const isPos = ['tremor', 'rigidez', 'bradicinesia'].includes(m.tipo);
-          const info = MARCADOR_LETRAS[m.tipo] || { letra: '?' };
-          const fill = isPos ? '#059669' : '#e11d48';
-          const opacity = Math.max(0.4, opacidadeMarcador(m.sessionTimestamp || m.timestamp || 0, sessaoAtualTimestamp || Date.now()));
-          const rRing = toR(m.amp || 0);
-          return (
-            <g key={`ring-${mi}`} opacity={opacity}>
-              <title>{`[ring] ${m.tipo} | ${m.amp}mA`}</title>
-              <circle cx={originX} cy={mOY} r={rRing} fill="none" stroke={fill} strokeWidth={1.5/tvEz} strokeDasharray="2,2" opacity={0.5}/>
-              <text x={originX + rRing * 0.707 + 2} y={mOY - rRing * 0.707 - 2}
-                textAnchor="middle" fontSize={Math.max(5, S * 0.04)} fill={fill} fontWeight="bold">{info.letra}</text>
-            </g>
-          );
-        })}
-        {/* Single-dir extras — each from its own Z-origin */}
-        {singleDir.filter(m => filterMarcador(m, false)).map((m, mi) => {
-          const c = parseConfigToContatos(m.config);
-          const vec = dirVector3D(c, m.amp || 0);
-          if (!vec || !isFinite(vec.ux) || !isFinite(vec.uz)) return null;
-          const { px: ux, py: uy } = getXY(vec);
-          const r = toR(vec.amp || 0);
-          const mOY = itemOriginY(m.config, showSchematic);
-          const svgX = originX + ux * r, svgY = mOY - uy * r;
-          if (!isFinite(svgX) || !isFinite(svgY)) return null;
-          const isPos = ['tremor', 'rigidez', 'bradicinesia'].includes(m.tipo);
-          const info = MARCADOR_LETRAS[m.tipo] || { letra: '?' };
-          const fill = isPos ? '#059669' : '#e11d48';
-          const opacity = Math.max(0.4, opacidadeMarcador(m.sessionTimestamp || m.timestamp || 0, sessaoAtualTimestamp || Date.now()));
-          return (
-            <g key={`sd-${mi}`} opacity={opacity * 0.7}>
-              <title>{`[single] ${m.tipo} | ${m.amp}mA`}</title>
-              <circle cx={svgX} cy={svgY} r={Math.max(3, S * 0.025)/tvEz} fill={fill} fillOpacity={0.2} stroke={fill} strokeWidth={1/tvEz} strokeDasharray="1,1"/>
-              <text x={svgX} y={svgY} textAnchor="middle" dominantBaseline="middle"
-                fontSize={Math.max(5, S * 0.038)} fill="#fff" fontWeight="bold" stroke={fill} strokeWidth={0.3}>{info.letra}</text>
-            </g>
-          );
-        })}
-        {/* Multi-dir markers — each from its own Z-origin */}
-        {multiDir.filter(m => filterMarcador(m, true)).map((m, mi) => {
-          const c = parseConfigToContatos(m.config);
-          const vec = dirVector3D(c, m.amp || 0);
-          if (!vec || !isFinite(vec.ux) || !isFinite(vec.uz)) return null;
-          const { px: ux, py: uy } = getXY(vec);
-          const r = toR(vec.amp || 0);
-          const mOY = itemOriginY(m.config, showSchematic);
-          const svgX = originX + ux * r, svgY = mOY - uy * r;
-          if (!isFinite(svgX) || !isFinite(svgY)) return null;
-          const isPos = ['tremor', 'rigidez', 'bradicinesia'].includes(m.tipo);
-          const info = MARCADOR_LETRAS[m.tipo] || { letra: '?' };
-          const fill = isPos ? '#059669' : '#e11d48';
-          const markerR = Math.max(3.5, S * 0.031);
-          const opacity = Math.max(0.4, opacidadeMarcador(m.sessionTimestamp || m.timestamp || 0, sessaoAtualTimestamp || Date.now()));
-          return (
-            <g key={`md-${mi}`} opacity={opacity}>
-              <title>{`${m.tipo} | ${m.amp}mA | ${m.freq}Hz`}</title>
-              <circle cx={svgX} cy={svgY} r={markerR/tvEz} fill={fill} fillOpacity={0.3} stroke={fill} strokeWidth={1.5/tvEz}/>
-              <text x={svgX} y={svgY} textAnchor="middle" dominantBaseline="middle"
-                fontSize={Math.max(6, S * 0.045)} fill="#fff" fontWeight="bold" stroke={fill} strokeWidth={0.3}>{info.letra}</text>
-            </g>
-          );
-        })}
-        {/* Indicadores de programação prévia — ring shown as rings, dir as dots */}
+
+        {/* Programações prévias: contorno de VTA na cor do efeito */}
         {mostrarPrevios && histItems.map((h, hi) => {
           if (!h || !h.config) return null;
-          const hContatos = parseConfigToContatos(h.config);
           const hType = getStimType(h);
           const isRing = hType === 'ring' || !getDirLevel(h.config);
           if (isRing && !mostrarRing) return null;
           if (!isRing && !mostrarSingleDir) return null;
-          const hVec = Object.keys(hContatos).length > 0 ? dirVector3D(hContatos, h.amp || 0) : null;
-          if (!hVec || !isFinite(hVec.ux) || !isFinite(hVec.uz)) return null;
+          const d = pathDe(vtaDeConfig(h.config, h.amp, h.pw), id);
+          if (!d) return null;
           const cor = getEfeitoCor(h.efeito, 'hex');
+          const corTraco = cor === 'transparent' ? '#94a3b8' : cor;
           const opacity = Math.max(0.35, opacidadeMarcador(h.date || 0, sessaoAtualTimestamp || Date.now()));
-          const hr = toR(hVec.amp || 0);
-          const hOY = itemOriginY(h.config, showSchematic);
-          if (!isFinite(hOY)) return null;
-          if (isRing) {
-            return (
-              <g key={`previo-${hi}`} opacity={opacity}>
-                <title>{`[prev-ring] ${h.config} | ${h.amp}mA | ${h.efeito}`}</title>
-                <circle cx={originX} cy={hOY} r={hr} fill="none" stroke={cor} strokeWidth={1.5/tvEz} strokeDasharray="3,2" opacity={0.6}/>
-              </g>
-            );
-          }
-          const { px: hux, py: huy } = getXY(hVec);
-          const hx = originX + hux * hr, hy = hOY - huy * hr;
-          if (!isFinite(hx) || !isFinite(hy)) return null;
           return (
-            <g key={`previo-${hi}`} opacity={opacity}>
-              <title>{`[prev-dir] ${h.config} | ${h.amp}mA | ${h.efeito}`}</title>
-              <circle cx={hx} cy={hy} r={Math.max(3.5, S * 0.028)/tvEz}
-                fill={cor} fillOpacity={0.3} stroke={cor} strokeWidth={1.5/tvEz}/>
-            </g>
+            <path key={`previo-${hi}`} d={d} fill={corTraco} fillOpacity={0.04} stroke={corTraco}
+              strokeWidth={1.2 / tvEz} strokeDasharray={h.efeito === 'nao_testado' ? '2,2' : undefined}
+              strokeLinejoin="round" opacity={opacity}>
+              <title>{`${h.config} | ${h.amp}mA | ${h.pw}µs | ${h.efeito}${h.date ? ' | ' + formatarData(h.date) : ''}`}</title>
+            </path>
           );
         })}
+
+        {/* Programa atual: VTA preenchida */}
+        {vtaAtual && (
+          <path d={pathDe(vtaAtual, id)} fill="#6366f1" fillOpacity={0.15} stroke="#6366f1"
+            strokeWidth={1.8 / tvEz} strokeDasharray="4,2" strokeLinejoin="round">
+            <title>{`Programa atual | ${Number(ampAtual).toFixed(1)}mA | ${pwAtual || 60}µs | alcance ${vtaAtual.resumo.rMax.toFixed(1)}mm`}</title>
+          </path>
+        )}
+
+        {longitudinal ? <ElectrodeSchematic/> : (
+          <>
+            <circle cx={C} cy={C} r={LEAD_R_MM * pxPorMm} fill="#cbd5e1" stroke="#64748b" strokeWidth={0.6 / tvEz}/>
+          </>
+        )}
+
+        {/* Marcadores de limiar na borda da VTA do respectivo programa */}
+        {ringMks.filter(m => filterMarcador(m, false)).map((m, mi) => desenharMarcador(m, mi, 'ring'))}
+        {singleDir.filter(m => filterMarcador(m, false)).map((m, mi) => desenharMarcador(m, mi, 'sd'))}
+        {multiDir.filter(m => filterMarcador(m, true)).map((m, mi) => desenharMarcador(m, mi, 'md'))}
       </svg>
     );
   };
@@ -624,7 +587,7 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
   return (
     <div className="flex flex-col gap-1 mb-2">
       <div className="flex items-center justify-between px-1 flex-wrap gap-1">
-        <p className="text-[8px] text-slate-500 uppercase tracking-widest">Multi-nível</p>
+        <p className="text-[8px] text-slate-500 uppercase tracking-widest" title="Contornos de VTA pelo modelo de campo elétrico (|E| ≥ 0,2 V/mm a 60 µs, ajustado ao PW). Escala em mm.">VTA · 3 planos (mm)</p>
         <div className="flex items-center gap-1.5 flex-wrap">
           <label className="flex items-center gap-0.5 cursor-pointer">
             <input type="checkbox" checked={mostrarRing} onChange={e => setMostrarRing(e.target.checked)} className="accent-indigo-500 w-3 h-3"/>
@@ -676,18 +639,29 @@ const TripleView3D = ({ marcadores, historicoRef, maxAmp: maxAmpProp, sessaoAtua
         <div key={grpKey} className="flex flex-col gap-0.5">
           <span className="text-[8px] text-slate-400 font-mono px-1">{grpKey}{labelPrefix}</span>
           <div className="flex gap-2 flex-wrap">
-            {projections.map(({ label, showSchematic, getXY, dirLabels }) => (
-              <div key={label} className="flex flex-col items-center gap-0.5">
+            {projections.map(({ id, label, longitudinal, dirLabels }) => (
+              <div key={id} className="flex flex-col items-center gap-0.5">
                 <span className="text-[7px] text-slate-500">{label}</span>
-                {renderOneSVG(grpKey, byGroup[grpKey], histByGroup3D[grpKey] || [], showSchematic, getXY, dirLabels)}
+                {renderOneSVG(grpKey, byGroup[grpKey], histByGroup3D[grpKey] || [], id, longitudinal, dirLabels)}
               </div>
             ))}
           </div>
         </div>
       ))}
+      <div className="flex flex-wrap items-center gap-2 px-1">
+        <span className="flex items-center gap-0.5 text-[7px] text-slate-500"><span className="inline-block w-3 h-2 rounded-sm border border-dashed border-indigo-500 bg-indigo-100"/>atual</span>
+        {EFEITO_LEGENDA_3D.map(([val, lbl]) => (
+          <span key={val} className="flex items-center gap-0.5 text-[7px] text-slate-500">
+            <span className="inline-block w-3 h-0.5" style={{ background: getEfeitoCor(val, 'hex') }}/>{lbl}
+          </span>
+        ))}
+        <span className="text-[7px] text-slate-400">· mais antigas mais claras</span>
+      </div>
     </div>
   );
 };
+
+const EFEITO_LEGENDA_3D = [['bom','melhor'],['neutro','bom'],['pouco','pouco efeito'],['col_marcha','col. marcha'],['col_fala','col. fala'],['col_outros','col. outros']];
 
 
 const SessionFilterDropdown = ({ sessions, hiddenSessions, onToggle }) => {
@@ -1641,7 +1615,7 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, tr
       if (efectiveMode === 'single-dir') {
         return <>{toggleBar}<DirectionalHistorico marcadores={marcadoresDisplay} historicoRef={historicoDisplay} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} onOpenFullscreen={(grpKey) => setFullscreenDisplay({tipo:'single', grpKey})}/></>;
       } else if (efectiveMode === 'multi-dir') {
-        return <>{toggleBar}<TripleView3D marcadores={marcadoresDisplay} marcadoresRing={marcadoresRingDisplay} historicoRef={historicoDisplay} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} onOpenFullscreen={() => setFullscreenDisplay({tipo:'multi'})}/></>;
+        return <>{toggleBar}<TripleView3D marcadores={marcadoresDisplay} marcadoresRing={marcadoresRingDisplay} historicoRef={historicoDisplay} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} tipoEletrodo={tipoEletrodo} pwAtual={pwAtual} modoContato={modoContato} modoAmplitude={modoAmplitude} impedancia={parseFloat((lado === 'L' ? impedanciaL : impedanciaR) || '0') || 0} onOpenFullscreen={() => setFullscreenDisplay({tipo:'multi'})}/></>;
       } else {
         return <>{toggleBar}<TimelineHistorico historicoRef={historicoRef} maxAmp={max} marcadores={marcadores} sessaoAtualTimestamp={sessaoAtualTimestamp} agruparPorFreq={agruparPorFreq}/></>;
       }
@@ -1666,7 +1640,7 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, tr
                 forcedSize={520}/>
             : fullscreenDisplay.tipo === 'single'
             ? <DirectionalHistorico marcadores={marcadores} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} forcedSize={520}/>
-            : <TripleView3D marcadores={marcadores} marcadoresRing={marcadoresRing} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} forcedSize={460}/>
+            : <TripleView3D marcadores={marcadores} marcadoresRing={marcadoresRing} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} tipoEletrodo={tipoEletrodo} pwAtual={pwAtual} modoContato={modoContato} modoAmplitude={modoAmplitude} impedancia={parseFloat((lado === 'L' ? impedanciaL : impedanciaR) || '0') || 0} forcedSize={460}/>
           }
         </div>
       </div>
