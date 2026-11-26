@@ -134,6 +134,20 @@ export const SessionSidebar = ({
                 {isAtual && <span className="text-[8px] font-black text-emerald-600 shrink-0">● ATUAL</span>}
                 {!isAtual && isHoje && <span className="text-[8px] text-emerald-500 shrink-0">hoje</span>}
               </div>
+              {(() => {
+                // "última atualização" discreta — só aparece se diferir da criação em > 5 min
+                const upd = sess.updatedAt;
+                if (!upd || upd - (sess.timestamp || 0) < 5 * 60 * 1000) return null;
+                const mesmoDia = new Date(upd).toDateString() === new Date(sess.timestamp).toDateString();
+                const txt = mesmoDia
+                  ? new Date(upd).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+                  : new Date(upd).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+                return (
+                  <p className="text-[8px] text-slate-400 italic leading-none mt-0.5" title={`Última atualização: ${formatarData(upd)}`}>
+                    atualizada {mesmoDia ? 'às' : 'em'} {txt}
+                  </p>
+                );
+              })()}
               {sess.resumoSessao && (
                 <p className={`text-[10px] mt-0.5 line-clamp-2 leading-snug ${isAtual ? 'text-emerald-600' : 'text-slate-500'}`}>
                   {sess.resumoSessao}

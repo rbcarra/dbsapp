@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
-import { MARCADOR_LETRAS, opacidadeMarcador, formatarData, getEfeitoCor } from './constants';
+import { MARCADOR_LETRAS, opacidadeMarcador, formatarData, getEfeitoCor, getEletrodo as getEletrodoDisplay } from './constants';
+import { estimarVTA, contornoLongitudinal, pitchDoEletrodo, nNiveisDoEletrodo, LEAD_R_MM, CONTACT_H_MM, E_LIMIAR_60US, FATOR_ANODO_PADRAO } from './vtaModel';
 import { DIR_ANGLES, parseConfigToContatos, classifyStim, getDirLevel,
   dirUnitVector2D, calcAmpEfetiva, dirVector3D } from './vectorHelpers';
 
@@ -836,7 +837,11 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
       <div className="overflow-x-auto custom-scrollbar rounded-t border border-slate-200 bg-slate-50 mb-1">
         <div ref={dragRef} className="flex flex-col p-1 space-y-1" style={{ width: `${innerW}px`, minWidth: '100%' }}>
       {/* Eixo X de amplitude */}
-      <div className="relative h-4 mx-0 pl-8 pr-1">
+      {/* Os ticks ficam num container com as MESMAS margens (ml-8 mr-1) das linhas de
+          marcação abaixo; antes usava pl-8 e o left:% de elementos absolute é medido
+          a partir da borda do padding, o que deslocava a escala em relação às barras. */}
+      <div className="relative h-4 flex">
+       <div className="relative flex-1 ml-8 mr-1">
         {ampTicks.map((tick) => {
           const leftPercent = Math.min(100, (tick / effectiveMax) * 100);
           return (
@@ -846,6 +851,7 @@ const TimelineHistorico = ({ historicoRef, maxAmp, marcadores, sessaoAtualTimest
             </div>
           );
         })}
+       </div>
         <span className="absolute right-0 top-3 text-[7px] text-slate-400">mA</span>
       </div>
 
@@ -1124,7 +1130,8 @@ const AtlasPanel = ({ target, S, C, mmToSvg, anteriorContact }) => {
 
 // ─── VTA VIEW ────────────────────────────────────────────────────────────────
 // Estimated Volume of Tissue Activated overlay in physical space (mm)
-// Uses analytical model: r ≈ k × √(I × PW) (Butson & McIntyre 2006, empirical)
+// Modelo por campo elétrico (src/vtaModel.js): fontes por contato com corrente
+// e polaridade próprias, superposição, região |E| ≥ limiar(PW).
 // Displayed as alternative mode to avoid polluting the clinical marker view
 
 const VTA_STRUCTURES = {
@@ -1139,17 +1146,18 @@ const VTA_STRUCTURES = {
 
 const POSITIVE_EFFECTS = new Set(['bradicinesia','rigidez','tremor']);
 
-const VTAView = ({ programaContatos, ampAtual, pw, marcadores, marcadoresRing,
+const VTAView = ({ programaContatos, modoContato, ampAtual, pw, marcadores, marcadoresRing,
                    historicoRef, anteriorContact, tipoEletrodo, sessaoAtualTimestamp,
                    forcedSize, structuralMap, modoAmplitude, impedanciaL, impedanciaR, lado }) => {
-  // k defaults: 0.45 for mA mode, 0.55 for V mode (Butson & McIntyre empirical)
-  const [kFactor, setKFactor] = React.useState(0.45);
+  // Modelo por campo elétrico (ver src/vtaModel.js): |E| ≥ limiar, superposição
+  // das fontes de cada contato com sua corrente e polaridade.
+  const [eLimiar60, setELimiar60] = React.useState(E_LIMIAR_60US);
+  const [penalizarAnodo, setPenalizarAnodo] = React.useState(true);
   const [showThresh, setShowThresh] = React.useState(true);
   const [showHist, setShowHist] = React.useState(true);
 
   const isVMode = modoAmplitude === 'V';
-  // Reset k default when mode changes
-  React.useEffect(() => { setKFactor(isVMode ? 0.55 : 0.45); }, [isVMode]);
+  const fatorAnodo = penalizarAnodo ? FATOR_ANODO_PADRAO : 1;
 
   const S = forcedSize ?? 260;
   const C = S / 2;
@@ -1162,60 +1170,87 @@ const VTAView = ({ programaContatos, ampAtual, pw, marcadores, marcadoresRing,
     rx: ux * Math.cos(xyTheta) - uy * Math.sin(xyTheta),
     ry: ux * Math.sin(xyTheta) + uy * Math.cos(xyTheta),
   });
-
-  // Current VTA: amplitude effective for radius calculation
-  // V mode: if impedance known → convert V→mA first (I=V/R); else use k_v × √(V×PW)
-  // mA mode: r = k × √(I_ef × PW)  (standard Butson & McIntyre)
-  const curVec = programaContatos ? dirUnitVector2D(programaContatos) : null;
-  const ampEf  = programaContatos && ampAtual ? calcAmpEfetiva(programaContatos, ampAtual) : 0;
-  const imp = parseFloat((lado === 'L' ? impedanciaL : impedanciaR) || '0') || 0;
-  const ampEffForVTA = isVMode && imp > 0
-    ? ampEf / imp * 1000   // V / Ω × 1000 = mA (then use mA formula)
-    : ampEf;               // already in mA, or V used directly with k_v
-  const vtaR = ampEffForVTA > 0 && pw > 0 ? kFactor * Math.sqrt(ampEffForVTA * pw) : 0;
-  // Ellipse: major = vtaR along stim dir, minor = vtaR * 0.65 perpendicular
-  const vtaMinor = vtaR * 0.65;
-
-  // Collect threshold markers: from marcadores + marcadoresRing + historicoRef
-  const threshMarkers = [];
-  const addMarker = (m, isHist) => {
-    if (!m || !m.config || !m.amp || !m.tipo) return;
-    const r_mm = kFactor * Math.sqrt((m.amp || 0) * (m.pw || pw || 60));
-    if (!isFinite(r_mm) || r_mm <= 0) return;
-    const c = parseConfigToContatos(m.config);
-    const vec = dirUnitVector2D(c);
-    if (!isFinite(vec.ux)) return;
-    const { rx, ry } = rotXY(vec.ux, vec.uy);
-    const isPos = POSITIVE_EFFECTS.has(m.tipo);
-    const struct = VTA_STRUCTURES[m.tipo] || VTA_STRUCTURES['Outros'];
-    const svgX = C + rx * mmToSvg(r_mm);
-    const svgY = C - ry * mmToSvg(r_mm);
-    if (!isFinite(svgX) || !isFinite(svgY)) return;
-    threshMarkers.push({ ...m, r_mm, svgX, svgY, isPos, struct, isHist });
+  // ponto (ângulo no referencial do eletrodo, raio mm) → coordenadas SVG
+  const polarToSvg = (ang, r) => {
+    const { rx, ry } = rotXY(Math.cos(ang), Math.sin(ang));
+    return { x: C + rx * mmToSvg(r), y: C - ry * mmToSvg(r) };
   };
 
-  if (showThresh) {
-    [...(marcadores || []), ...(marcadoresRing || [])].forEach(m => addMarker(m, false));
-  }
-  if (showHist) {
-    (historicoRef || []).forEach(m => addMarker(m, true));
-  }
+  const imp = parseFloat((lado === 'L' ? impedanciaL : impedanciaR) || '0') || 0;
+  const opcoes = { eLimiar60, fatorAnodo };
+
+  // VTA do programa atual
+  const vta = React.useMemo(() => {
+    if (!programaContatos || !(ampAtual > 0)) return null;
+    return estimarVTA({ contatos: programaContatos, amp: ampAtual, pw, modoContato, tipoEletrodo,
+                        modoAmplitude, impedanciaOhm: imp }, opcoes);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [programaContatos, ampAtual, pw, modoContato, tipoEletrodo, modoAmplitude, imp, eLimiar60, fatorAnodo]);
+  const vtaR = vta?.resumo.rMax || 0;
+  const anisotropica = vta && vta.resumo.aniso > 1.08;
+
+  const vtaPath = React.useMemo(() => {
+    if (!vta || !vta.axial.length) return null;
+    return vta.axial.map(({ ang, r }, i) => {
+      const p = polarToSvg(ang, Math.max(r, LEAD_R_MM));
+      return `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`;
+    }).join(' ') + ' Z';
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vta, S, anteriorContact]);
+
+  // Marcadores de limiar: cada um é posicionado na borda da VTA que o seu
+  // próprio programa (config + amp + PW) teria, na direção de maior alcance.
+  // Configs simétricas (anel) viram um círculo tracejado.
+  const threshMarkers = React.useMemo(() => {
+    const out = [];
+    const cache = new Map();
+    const addMarker = (m, isHist) => {
+      if (!m || !m.config || !m.amp || !m.tipo) return;
+      const key = `${m.config}|${m.amp}|${m.pw || pw}`;
+      let res = cache.get(key);
+      if (!res) {
+        const c = parseConfigToContatos(m.config);
+        res = estimarVTA({ contatos: c, amp: m.amp, pw: m.pw || pw || 60, modoContato: 'perc',
+                           tipoEletrodo, modoAmplitude, impedanciaOhm: imp },
+                         { ...opcoes, nAng: 24, passo: 0.1 }).resumo;
+        cache.set(key, res);
+      }
+      if (!(res.rMax > 0)) return;
+      const isPos = POSITIVE_EFFECTS.has(m.tipo);
+      const struct = VTA_STRUCTURES[m.tipo] || VTA_STRUCTURES['Outros'];
+      const simetrico = res.aniso <= 1.08;
+      const p = polarToSvg(res.angMax, res.rMax);
+      out.push({ ...m, r_mm: res.rMax, svgX: p.x, svgY: p.y, simetrico, isPos, struct, isHist });
+    };
+    if (showThresh) [...(marcadores || []), ...(marcadoresRing || [])].forEach(m => addMarker(m, false));
+    if (showHist) (historicoRef || []).forEach(m => addMarker(m, true));
+    return out;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marcadores, marcadoresRing, historicoRef, showThresh, showHist, pw, tipoEletrodo, modoAmplitude, imp, eLimiar60, fatorAnodo, S, anteriorContact]);
+
+  // Vista longitudinal: plano que contém o eixo do eletrodo e a direção de
+  // maior alcance (ou a anterior, se simétrica). z = 0 no nível mais distal.
+  const pitch = pitchDoEletrodo(tipoEletrodo);
+  const nNiv = nNiveisDoEletrodo(tipoEletrodo);
+  const zLo = -3, zHi = (nNiv - 1) * pitch + 3;
+  const angLong = anisotropica ? vta.resumo.angMax : (CONTACT_ANTERIOR_ANGLES[anteriorContact] ?? 90) * Math.PI / 180;
+  const faixasLong = React.useMemo(() => {
+    if (!vta || !vta.fontes.length) return [];
+    return contornoLongitudinal(vta.fontes, angLong, vta.eLimiar, { zMin: zLo, zMax: zHi, passoZ: 0.1, fatorAnodo });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vta, angLong, zLo, zHi, fatorAnodo]);
+  const zExt = faixasLong.length
+    ? [Math.min(...faixasLong.map(f => f[0].z)), Math.max(...faixasLong.map(f => f[f.length - 1].z))]
+    : null;
 
   // Grid rings in mm
   const mmRings = [0.5, 1, 1.5, 2, 2.5, 3, 4, 5];
 
-  // Stim direction arrow for current program
+  // Seta: direção de maior alcance (só quando a VTA não é simétrica)
   let stimArrow = null;
-  if (curVec && vtaR > 0 && isFinite(curVec.ux)) {
-    const { rx, ry } = rotXY(curVec.ux, curVec.uy);
-    const ex = C + rx * mmToSvg(vtaR), ey = C - ry * mmToSvg(vtaR);
-    stimArrow = { rx, ry, ex, ey };
-  }
-
-  // VTA ellipse: rotated by stim direction
-  let vtaEllipseAngle = 0;
-  if (stimArrow) {
-    vtaEllipseAngle = Math.atan2(-stimArrow.ry, stimArrow.rx) * 180 / Math.PI;
+  if (anisotropica && vtaR > 0) {
+    const e = polarToSvg(vta.resumo.angMax, vtaR);
+    stimArrow = { ex: e.x, ey: e.y };
   }
 
   const [showAtlas, setShowAtlas] = React.useState(false);
@@ -1232,16 +1267,21 @@ const VTAView = ({ programaContatos, ampAtual, pw, marcadores, marcadoresRing,
       {/* Controls */}
       <div className="flex items-center gap-2 flex-wrap px-0.5">
         {/* Mode indicator */}
-        <div className={`text-[7px] font-bold px-1.5 py-0.5 rounded border ${isVMode ? 'bg-amber-100 border-amber-300 text-amber-700' : 'bg-indigo-100 border-indigo-200 text-indigo-600'}`}>
-          {isVMode ? (imp>0?'V→mA/R':'V-ctrl') : 'I-ctrl'}
+        <div className={`text-[7px] font-bold px-1.5 py-0.5 rounded border ${isVMode ? 'bg-amber-100 border-amber-300 text-amber-700' : 'bg-indigo-100 border-indigo-200 text-indigo-600'}`}
+          title={isVMode ? (imp > 0 ? `Voltagem convertida em corrente: I = V / ${imp} Ω` : 'Voltagem sem impedância informada: assume 1000 Ω') : 'Corrente controlada'}>
+          {isVMode ? (imp > 0 ? 'V→mA/R' : 'V (Z≈1kΩ)') : 'I-ctrl'}
         </div>
-        <div className="flex items-center gap-1">
-          <span className="text-[7px] text-slate-400 uppercase font-bold">k=</span>
-          <input type="range" min={0.1} max={0.9} step={0.05} value={kFactor}
-            onChange={e => setKFactor(parseFloat(e.target.value))}
-            className="w-16 h-1 accent-blue-500 cursor-pointer"/>
-          <span className="text-[7px] text-slate-500 w-8">{kFactor.toFixed(2)}</span>
+        <div className="flex items-center gap-1" title="Limiar de campo elétrico para ativação axonal a 60 µs (Åström 2015 ≈ 0,2 V/mm). Ajustado automaticamente ao PW atual.">
+          <span className="text-[7px] text-slate-400 uppercase font-bold">E≥</span>
+          <input type="range" min={0.1} max={0.5} step={0.01} value={eLimiar60}
+            onChange={e => setELimiar60(parseFloat(e.target.value))}
+            className="w-14 h-1 accent-blue-500 cursor-pointer"/>
+          <span className="text-[7px] text-slate-500 w-14">{eLimiar60.toFixed(2)} V/mm</span>
         </div>
+        <label className="flex items-center gap-0.5 cursor-pointer" title="Limiar 3× maior perto de ânodos (estimulação anódica é menos eficiente). Desligado = |E| puro, simétrico.">
+          <input type="checkbox" checked={penalizarAnodo} onChange={e => setPenalizarAnodo(e.target.checked)} className="accent-rose-500 w-3 h-3"/>
+          <span className="text-[7px] text-slate-500">Ânodo 3×</span>
+        </label>
         <label className="flex items-center gap-0.5 cursor-pointer">
           <input type="checkbox" checked={showThresh} onChange={e => setShowThresh(e.target.checked)} className="accent-slate-500 w-3 h-3"/>
           <span className="text-[7px] text-slate-500">Limiares</span>
@@ -1251,8 +1291,9 @@ const VTAView = ({ programaContatos, ampAtual, pw, marcadores, marcadoresRing,
           <span className="text-[7px] text-slate-400">Histórico</span>
         </label>
         {vtaR > 0 && (
-          <span className="text-[7px] font-mono text-blue-600 font-bold ml-auto">
-            VTA ≈ {vtaR.toFixed(1)}mm
+          <span className="text-[7px] font-mono text-blue-600 font-bold ml-auto"
+            title={`Alcance radial no plano do cátodo (z=${vta.z.toFixed(1)} mm). Limiar efetivo p/ ${pw} µs: ${vta.eLimiar.toFixed(2)} V/mm`}>
+            VTA ≈ {vtaR.toFixed(1)}{anisotropica ? `/${vta.resumo.rMin.toFixed(1)}` : ''}mm
           </span>
         )}
       </div>
@@ -1288,21 +1329,14 @@ const VTAView = ({ programaContatos, ampAtual, pw, marcadores, marcadoresRing,
           ↓ {anteriorContact}
         </text>
 
-        {/* VTA ellipse for current program */}
-        {vtaR > 0 && (
+        {/* VTA do programa atual — contorno |E| ≥ limiar no plano do cátodo */}
+        {vtaPath && (
           <g>
-            <ellipse cx={C} cy={C}
-              rx={mmToSvg(vtaR)} ry={mmToSvg(vtaMinor)}
-              fill="#3b82f6" fillOpacity={0.12}
-              stroke="#3b82f6" strokeWidth={1.5}
-              strokeDasharray="4,2"
-              transform={`rotate(${vtaEllipseAngle}, ${C}, ${C})`}/>
-            {/* Stim direction arrow */}
+            <path d={vtaPath} fill="#3b82f6" fillOpacity={0.12}
+              stroke="#3b82f6" strokeWidth={1.5} strokeDasharray="4,2" strokeLinejoin="round"/>
             {stimArrow && (
-              <line x1={C} y1={C}
-                x2={stimArrow.ex} y2={stimArrow.ey}
-                stroke="#3b82f6" strokeWidth={1.5}
-                markerEnd="url(#vtaArrow)" opacity={0.7}/>
+              <line x1={C} y1={C} x2={stimArrow.ex} y2={stimArrow.ey}
+                stroke="#3b82f6" strokeWidth={1.5} markerEnd="url(#vtaArrow)" opacity={0.7}/>
             )}
           </g>
         )}
@@ -1346,6 +1380,20 @@ const VTAView = ({ programaContatos, ampAtual, pw, marcadores, marcadoresRing,
             ? Math.max(0.3, opacidadeMarcador(m.sessionTimestamp || m.timestamp || 0, sessaoAtualTimestamp || Date.now()))
             : 0.9;
           const r = m.isHist ? 4 : 6;
+          if (m.simetrico) {
+            // Config anelar: o limiar vale para todas as direções → círculo
+            return (
+              <g key={`vta-mk-${mi}`} opacity={opacity * 0.8}>
+                <title>{m.tipo} — {m.r_mm.toFixed(1)}mm (anel) — {m.amp}mA/{m.pw||'?'}µs</title>
+                <circle cx={C} cy={C} r={mmToSvg(m.r_mm)} fill="none"
+                  stroke={m.struct.color} strokeWidth={m.isHist ? 0.6 : 1} strokeDasharray="1,2"/>
+                {!m.isHist && (
+                  <text x={C} y={C - mmToSvg(m.r_mm) - 1.5} textAnchor="middle"
+                    fontSize={5.5} fontWeight="bold" fill={m.struct.color}>{m.struct.label}</text>
+                )}
+              </g>
+            );
+          }
           return (
             <g key={`vta-mk-${mi}`} opacity={opacity}>
               <title>{m.tipo} — {m.r_mm.toFixed(1)}mm — {m.amp}mA/{m.pw||'?'}µs</title>
@@ -1365,6 +1413,61 @@ const VTAView = ({ programaContatos, ampAtual, pw, marcadores, marcadoresRing,
           );
         })}
       </svg>
+
+      {/* Vista longitudinal */}
+      {vta && faixasLong.length > 0 && (() => {
+        const sc = (C - 12) / MAX_MM;                 // px por mm (mesma escala)
+        const W = S, H = Math.round((zHi - zLo) * sc + 16);
+        const X0 = W / 2;
+        const zToY = (z) => 8 + (zHi - z) * sc;       // distal embaixo
+        const el = getEletrodoDisplay(tipoEletrodo);
+        const pathFaixa = (f) => {
+          const dir = f.map(p => `${(X0 + p.rPos * sc).toFixed(1)},${zToY(p.z).toFixed(1)}`);
+          const esq = [...f].reverse().map(p => `${(X0 - p.rNeg * sc).toFixed(1)},${zToY(p.z).toFixed(1)}`);
+          return `M${dir.join(' L')} L${esq.join(' L')} Z`;
+        };
+        return (
+          <div className="flex flex-col gap-0.5">
+            <p className="text-[7px] font-bold text-slate-400 uppercase tracking-wider px-0.5">
+              Corte longitudinal · {anisotropica ? 'plano da direção de estímulo' : `plano anterior (${anteriorContact})`}
+              {zExt && <span className="normal-case font-mono text-blue-600"> · extensão axial ≈ {(zExt[1] - zExt[0]).toFixed(1)} mm</span>}
+            </p>
+            <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="rounded-xl border border-slate-200 bg-white">
+              <rect width={W} height={H} fill="#f8fafc" rx={10}/>
+              {[1, 2, 3, 4].map(mm => (
+                <g key={mm}>
+                  <line x1={X0 + mm * sc} y1={6} x2={X0 + mm * sc} y2={H - 6} stroke="#e2e8f0" strokeWidth={0.5} strokeDasharray="2,3"/>
+                  <line x1={X0 - mm * sc} y1={6} x2={X0 - mm * sc} y2={H - 6} stroke="#e2e8f0" strokeWidth={0.5} strokeDasharray="2,3"/>
+                  <text x={X0 + mm * sc + 1} y={H - 4} fontSize={6} fill="#94a3b8">{mm}</text>
+                </g>
+              ))}
+              {faixasLong.map((f, i) => (
+                <path key={i} d={pathFaixa(f)} fill="#3b82f6" fillOpacity={0.12} stroke="#3b82f6" strokeWidth={1.2} strokeDasharray="4,2" strokeLinejoin="round"/>
+              ))}
+              {/* corpo do eletrodo */}
+              <rect x={X0 - LEAD_R_MM * sc} y={zToY(zHi)} width={2 * LEAD_R_MM * sc} height={(zHi - zLo + 0.5) * sc}
+                fill="#cbd5e1" stroke="#94a3b8" strokeWidth={0.5}/>
+              {el.niveis.map(n => {
+                const zc = n.idx * pitch;
+                const y = zToY(zc + CONTACT_H_MM / 2), h = CONTACT_H_MM * sc;
+                // estado mais "forte" do nível (cátodo > ânodo > off)
+                const estados = n.contatos.map(k => programaContatos?.[k]?.state || 'off');
+                const st = estados.includes('-') ? '-' : estados.includes('+') ? '+' : 'off';
+                const fill = st === '-' ? '#06b6d4' : st === '+' ? '#f43f5e' : '#e2e8f0';
+                return (
+                  <g key={n.idx}>
+                    <rect x={X0 - LEAD_R_MM * sc} y={y} width={2 * LEAD_R_MM * sc} height={h}
+                      fill={fill} stroke="#64748b" strokeWidth={0.5} rx={1}/>
+                    <text x={X0 - LEAD_R_MM * sc - 3} y={y + h / 2 + 2} textAnchor="end" fontSize={6} fill="#64748b">
+                      {n.tipo === 'dir' ? `${n.idx}ABC` : n.idx}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
+        );
+      })()}
 
       {/* Structural map overlay from Python mapper */}
       {structuralMap && structuralMap.structures && structuralMap.structures.length > 0 ? (
@@ -1435,7 +1538,7 @@ const VTAView = ({ programaContatos, ampAtual, pw, marcadores, marcadoresRing,
   );
 };
 
-const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, isAmplitude, historicoRef, marcadores, marcadoresRing, marcadoresTodosL, historicoTodos, structuralMap, sessaoAtualTimestamp, tipoEletrodo, programaContatos, modoAmplitude, impedanciaL, impedanciaR, lado }) => {
+const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, travado, modoContato, pwAtual, isAmplitude, historicoRef, marcadores, marcadoresRing, marcadoresTodosL, historicoTodos, structuralMap, sessaoAtualTimestamp, tipoEletrodo, programaContatos, modoAmplitude, impedanciaL, impedanciaR, lado }) => {
   const [agruparPorFreq, setAgruparPorFreq] = React.useState(false);
   const [anteriorContact, setAnteriorContact] = React.useState('A');
   const [fullscreenDisplay, setFullscreenDisplay] = React.useState(null); // {tipo, grpKey}
@@ -1511,12 +1614,14 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, is
         : /* timeline */           'timeline';
 
       // Infer current PW from historicoRef or fall back to 60µs
-      const currentPw = (historicoRef && historicoRef[0]?.pw) || 60;
+      // PW do PROGRAMA ATUAL (antes vinha do histórico → VTA com PW errado)
+      const currentPw = pwAtual || (historicoRef && historicoRef[0]?.pw) || 60;
 
       if (efectiveMode === 'vta') {
         const allThreshMarkers = [...(marcadoresTodosL || marcadores), ...(marcadoresRing || [])];
         return <>{toggleBar}<VTAView
           programaContatos={programaContatos}
+          modoContato={modoContato}
           ampAtual={valor}
           pw={currentPw}
           marcadores={allThreshMarkers}
@@ -1552,10 +1657,12 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, is
             <button onClick={() => setFullscreenDisplay(null)} className="text-slate-400 hover:text-slate-700 text-2xl font-bold leading-none">×</button>
           </div>
           {fullscreenDisplay.tipo === 'vta'
-            ? <VTAView programaContatos={programaContatos} ampAtual={valor} pw={currentPw}
+            ? <VTAView programaContatos={programaContatos} modoContato={modoContato} ampAtual={valor} pw={pwAtual || (historicoRef && historicoRef[0]?.pw) || 60}
                 marcadores={marcadoresTodosL||marcadores} marcadoresRing={[]}
                 historicoRef={historicoTodos||historicoRef} anteriorContact={anteriorContact}
                 tipoEletrodo={tipoEletrodo} sessaoAtualTimestamp={sessaoAtualTimestamp}
+                structuralMap={structuralMap} modoAmplitude={modoAmplitude}
+                impedanciaL={impedanciaL} impedanciaR={impedanciaR} lado={lado}
                 forcedSize={520}/>
             : fullscreenDisplay.tipo === 'single'
             ? <DirectionalHistorico marcadores={marcadores} historicoRef={historicoRef} maxAmp={max} sessaoAtualTimestamp={sessaoAtualTimestamp} programaContatos={programaContatos} ampAtual={valor} agruparPorFreq={agruparPorFreq} anteriorContact={anteriorContact} forcedSize={520}/>
@@ -1565,6 +1672,16 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, is
       </div>
     )}
     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1 mt-1">{label}</label>
+    {travado ? (
+      <div className="flex items-center gap-1.5" title="Modo mA por contato: amplitude total = soma das correntes dos contatos">
+        <div className="flex-1 h-1.5 bg-slate-200 rounded-lg relative overflow-hidden">
+          <div className="absolute inset-y-0 left-0 bg-indigo-300" style={{ width: `${Math.min(100, (valor / (max || 1)) * 100)}%` }} />
+        </div>
+        <span className="text-[9px] font-bold text-indigo-500 uppercase">Σ contatos</span>
+        <span className="w-12 text-right font-bold text-sm text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1">{Number(valor || 0).toFixed(1)}</span>
+        <span className="text-[10px] font-bold text-slate-500">{unidade}</span>
+      </div>
+    ) : (
     <div className="flex items-center gap-1.5">
       <button onClick={() => onChange(Math.max(min, Number((valor - step).toFixed(2))))} className="w-6 h-6 rounded bg-slate-200 hover:bg-slate-300 font-bold text-sm flex-shrink-0 flex items-center justify-center">-</button>
       <input type="range" min={min} max={max} step={step} value={valor} onChange={(e) => onChange(parseFloat(e.target.value))} className="flex-1 h-1.5 bg-slate-300 rounded-lg appearance-none cursor-pointer accent-indigo-600"/>
@@ -1578,6 +1695,7 @@ const ControleParametro = ({ label, valor, unidade, step, min, max, onChange, is
         <span className="text-[10px] font-bold text-slate-500">{unidade}</span>
       </div>
     </div>
+    )}
   </div>
   );
 };

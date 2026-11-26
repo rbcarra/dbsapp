@@ -4,7 +4,8 @@ import { collection, doc, setDoc, getDoc, onSnapshot, addDoc, deleteDoc, updateD
 
 import { ORDEM_TEXTO_BAIXO_CIMA, MARCADOR_LETRAS, EFEITO_OPTS, getEfeitoCor,
   opacidadeMarcador, getContatosIniciais, getStringConfig, formatarData,
-  convertParsedGrupos, criarProgramaVazio, listaEletrodos } from './constants';
+  convertParsedGrupos, criarProgramaVazio, listaEletrodos,
+  recalcularProgramaPorMa, inicializarMaDePerc, textoContato } from './constants';
 import { getDirLevel, dirUnitVector2D, calcAmpEfetiva, classifyStim } from './vectorHelpers';
 import { BlocoColapsavel, LoginModal, PatientSelector, ConfirmDialog } from './PatientComponents';
 import { RenderPrograma } from './ProgramComponents';
@@ -464,9 +465,14 @@ export default function App() {
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current = setTimeout(async () => {
       try {
+        const original = sessions.find(s => s.id === editingSessionId);
+        // Sem o original carregado não dá para preservar a data: não grava.
+        if (!original) { setAutoSaveStatus('idle'); return; }
         const sessionData = {
           patientId: activePatient.id,
-          timestamp: sessions.find(s => s.id === editingSessionId)?.timestamp || Date.now(),
+          timestamp: original.timestamp,                       // data de criação: imutável
+          createdAt: original.createdAt || original.timestamp,
+          updatedAt: Date.now(),
           type: 'active',
           tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao, transcricaoBruta, transcricaoOrganizada, logEventos,
           voltagemBateria, impedanciaL, impedanciaR,
@@ -497,13 +503,7 @@ export default function App() {
           const leadStr = lado === 'L' ? 'E' : 'D';
           const leadName = progs.length > 1 ? `Lead ${leadStr}${idx + 1}` : `Lead ${leadStr}`;
           
-          const contactStr = ordem.map(c => {
-            const st = prog.contatos[c].state;
-            if (st === 'off') return '0';
-            const perc = prog.contatos[c].perc;
-            if (perc < 100) return `${st}(${perc}%)`;
-            return st;
-          }).join('');
+          const contactStr = ordem.map(c => textoContato(prog.contatos[c], prog.modoContato)).join('');
           if ((prog.amp || 0) > 0) {
             text += `${leadName} ${contactStr} ${prog.amp.toFixed(1)} mA ${prog.pw} µs ${prog.freq} Hz\n`;
           }
@@ -933,17 +933,29 @@ export default function App() {
   const handleSalvarSessao = async (modoAtualizar = false) => {
     if (!user || !activePatient) return;
     
+    // modoAtualizar=true  → grava por cima da sessão em edição (se houver).
+    // modoAtualizar=false → SEMPRE cria um documento novo ("Duplicar" / "Salvar
+    // como nova"). Antes, com uma sessão aberta, este caminho sobrescrevia a
+    // sessão de origem com timestamp = agora, mudando a data dela.
+    const atualizandoExistente = modoAtualizar && !!editingSessionId;
+    const agora = Date.now();
+    const original = atualizandoExistente ? sessions.find(s => s.id === editingSessionId) : null;
+    // timestamp = data de criação → imutável depois de gravada
+    const criadoEm = original ? (original.createdAt || original.timestamp || agora) : agora;
     const sessionData = {
-      patientId: activePatient.id, 
-      timestamp: modoAtualizar && editingSessionId ? (sessions.find(s => s.id === editingSessionId)?.timestamp || Date.now()) : Date.now(),
+      patientId: activePatient.id,
+      timestamp: original ? (original.timestamp || criadoEm) : agora,
+      createdAt: criadoEm,
+      updatedAt: agora,
       type: 'active',
       tipoEletrodo, modoAmplitude, dispositivoInfo, dadosGrupos, clinica, efeitosColaterais, notasLivres, resumoSessao,
+      transcricaoBruta, transcricaoOrganizada, logEventos,
       voltagemBateria, impedanciaL, impedanciaR,
       marcadoresClinicosL, marcadoresClinicosR, tendenciasEstimulacao
     };
 
     try {
-      if (editingSessionId) {
+      if (atualizandoExistente) {
         const oldDoc = sessions.find(s => s.id === editingSessionId);
         if (oldDoc) {
           const { id, ...docWithoutId } = oldDoc;
@@ -973,7 +985,6 @@ export default function App() {
       }
       
       await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'temp_sessions', activePatient.id)).catch(() => {});
-      if (!modoAtualizar) setEditingSessionId(null);
     } catch(err) {
       console.error(err);
       showToast("Erro ao salvar sessão.");
@@ -999,7 +1010,7 @@ export default function App() {
     const emptyGrupos = { A:{L:[makeEmpty()],R:[makeEmpty()]}, B:{L:[makeEmpty()],R:[makeEmpty()]},
                           C:{L:[makeEmpty()],R:[makeEmpty()]}, D:{L:[makeEmpty()],R:[makeEmpty()]} };
     const sessionData = {
-      patientId: activePatient.id, timestamp: Date.now(), type: 'active',
+      patientId: activePatient.id, timestamp: Date.now(), createdAt: Date.now(), updatedAt: Date.now(), type: 'active',
       tipoEletrodo: '4-ring', modoAmplitude: 'mA',
       dispositivoInfo: { fabricante:'', modeloIPG:'', modeloEletrodoE:'', modeloEletrodoD:'',
         alvoAnatomicoE:'', alvoAnatomicoD:'', dataImplante:'', dataTrocaIPG:'' },
@@ -1251,7 +1262,7 @@ export default function App() {
     });
     try {
       await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'sessions', ultima.id), {
-        dadosGrupos: novosDadosGrupos
+        dadosGrupos: novosDadosGrupos, updatedAt: Date.now()
       });
     } catch(e) { console.error('Erro ao salvar efeito:', e); }
 
@@ -1559,7 +1570,32 @@ export default function App() {
   const atualizarContatoState = (lado, index, chaveContato, novoEstado) => {
     setProgsAtual(lado, prev => {
       const novo = [...prev];
-      novo[index].contatos = { ...novo[index].contatos, [chaveContato]: { state: novoEstado, perc: novoEstado === 'off' ? 100 : novo[index].contatos[chaveContato].perc } };
+      const ant = novo[index].contatos[chaveContato] || {};
+      const c = { state: novoEstado, perc: novoEstado === 'off' ? 100 : ant.perc };
+      if (novo[index].modoContato === 'mA' && novoEstado !== 'off') c.ma = Number(ant.ma) || 0;
+      novo[index] = { ...novo[index], contatos: { ...novo[index].contatos, [chaveContato]: c } };
+      if (novo[index].modoContato === 'mA') novo[index] = recalcularProgramaPorMa(novo[index]);
+      return novo;
+    });
+  };
+
+  // Modo "mA por contato": corrente individual → amplitude total = soma
+  const atualizarContatoMa = (lado, index, chaveContato, novoMa) => {
+    setProgsAtual(lado, prev => {
+      const novo = [...prev];
+      const contatos = { ...novo[index].contatos, [chaveContato]: { ...novo[index].contatos[chaveContato], ma: novoMa } };
+      novo[index] = recalcularProgramaPorMa({ ...novo[index], contatos });
+      return novo;
+    });
+  };
+
+  const alternarModoContato = (lado, index) => {
+    setProgsAtual(lado, prev => {
+      const novo = [...prev];
+      const p = novo[index];
+      novo[index] = p.modoContato === 'mA'
+        ? { ...p, modoContato: 'perc' }        // mantém amp e % já derivadas
+        : inicializarMaDePerc(p);              // distribui amp atual entre os contatos
       return novo;
     });
   };
@@ -2262,6 +2298,7 @@ export default function App() {
                         onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('L', cfg)}
                         impedancia={impedanciaL} onImpedanciaChange={setImpedanciaL}
                         onUpdateProg={atualizarPrograma} onUpdateState={atualizarContatoState} onUpdatePerc={atualizarContatoPerc}
+                        onUpdateMa={atualizarContatoMa} onToggleModoContato={alternarModoContato}
                         ignorarPerc={!considerarAmplitude}
                       />
                     </div>
@@ -2331,6 +2368,7 @@ export default function App() {
                         onDesfazerMarcadores={(cfg) => desfazerMarcadoresConfig('R', cfg)}
                         impedancia={impedanciaR} onImpedanciaChange={setImpedanciaR}
                         onUpdateProg={atualizarPrograma} onUpdateState={atualizarContatoState} onUpdatePerc={atualizarContatoPerc}
+                        onUpdateMa={atualizarContatoMa} onToggleModoContato={alternarModoContato}
                         ignorarPerc={!considerarAmplitude}
                       />
                     </div>
@@ -2518,13 +2556,13 @@ export default function App() {
                 const isPos = ['tremor','rigidez','bradicinesia'].includes(m.tipo);
                 const info = MARCADOR_LETRAS[m.tipo] || { letra: '?', cor: isPos ? 'text-emerald-700' : 'text-rose-700' };
                 const corFundo = isPos ? 'bg-emerald-100 border-emerald-300' : 'bg-rose-100 border-rose-300';
-                const leftPct = Math.min(98, (m.amp / effectiveMax) * 100);
+                const leftPct = Math.min(100, (m.amp / effectiveMax) * 100);
                 const sameAmpIdx = filtrados.filter((mm, mmi) => mm.amp === m.amp && mmi < mi).length;
                 const offsetX = sameAmpIdx * 8;
                 return (
                   <div key={mi}
                     className={`absolute w-5 h-5 rounded-full border ${corFundo} flex items-center justify-center`}
-                    style={{ left: `calc(${leftPct}% + ${offsetX}px)`, top: '50%', transform: 'translateY(-50%)' }}
+                    style={{ left: `calc(${leftPct}% + ${offsetX}px)`, top: '50%', transform: 'translate(-50%, -50%)' }}
                     title={`${lado ? lado : ''}${config.match(/^([^-+]+)/)?.[1] || ''} | ${m.tipo} | ${m.amp}mA | ${m.freq}Hz | PW:${m.pw}`}
                   >
                     <span className={`text-[9px] font-black ${info.cor}`}>{info.letra}</span>
@@ -2733,12 +2771,7 @@ export default function App() {
               (grupo[lado] || []).forEach((prog, idx) => {
                 const progs = grupo[lado];
                 const leadName = progs.length > 1 ? `  Lead ${leadStr}${idx+1}` : `  Lead ${leadStr}`;
-                const contactStr = ord.map(c => {
-                  const st = prog.contatos?.[c]?.state || 'off';
-                  if (st === 'off') return '0';
-                  const perc = prog.contatos[c]?.perc;
-                  return perc < 100 ? `${st}(${perc}%)` : st;
-                }).join('');
+                const contactStr = ord.map(c => textoContato(prog.contatos?.[c], prog.modoContato)).join('');
                 txt += `${leadName}: ${contactStr}  ${prog.amp?.toFixed(1)}mA  ${prog.pw}µs  ${prog.freq}Hz\n`;
               });
             });

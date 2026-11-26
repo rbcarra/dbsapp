@@ -152,13 +152,84 @@ const getStringConfig = (contatos, ignorarPerc = false) => {
 
 // Texto de prontuário para um lead: "0-00", "0-(30%)0+", etc.
 // Mesma regra usada em gerarTextoProntuario — exportada para não duplicar.
-const contatosParaTextoProntuario = (contatos, tipo) => {
-  return getEletrodo(tipo).ordemBaixoCima.map(c => {
-    const st = contatos?.[c]?.state || 'off';
-    if (st === 'off') return '0';
-    const perc = contatos[c].perc;
-    return perc < 100 ? `${st}(${perc}%)` : st;
-  }).join('');
+const contatosParaTextoProntuario = (contatos, tipo, modoContato) => {
+  return getEletrodo(tipo).ordemBaixoCima.map(c => textoContato(contatos?.[c], modoContato)).join('');
+};
+
+// ─── MODO DE AMPLITUDE POR CONTATO ───────────────────────────────────────────
+// programa.modoContato:
+//   'perc' (padrão) → amplitude total (programa.amp) + % por contato
+//   'mA'            → corrente individual por contato (contato.ma); a amplitude
+//                     total é DERIVADA = soma aritmética das correntes de cada
+//                     polaridade (a maior delas, se cátodos ≠ ânodos). As % continuam sendo
+//                     calculadas (fração dentro de cada polaridade), para que
+//                     config strings, timeline e VTA funcionem sem alteração.
+const r2 = (x) => Math.round(x * 100) / 100;
+
+const somaPolaridades = (contatos) => {
+  let cat = 0, ano = 0;
+  Object.values(contatos || {}).forEach(c => {
+    if (!c || c.state === 'off') return;
+    const ma = Number(c.ma) || 0;
+    if (c.state === '-') cat += ma; else if (c.state === '+') ano += ma;
+  });
+  return { cat: r2(cat), ano: r2(ano) };
+};
+
+// Recalcula amp e % a partir das correntes individuais (modo 'mA').
+const recalcularProgramaPorMa = (prog) => {
+  const contatos = { ...(prog.contatos || {}) };
+  const { cat, ano } = somaPolaridades(contatos);
+  Object.entries(contatos).forEach(([k, c]) => {
+    if (!c || c.state === 'off') return;
+    const tot = c.state === '-' ? cat : ano;
+    const ma = Number(c.ma) || 0;
+    contatos[k] = { ...c, perc: tot > 0 ? Math.round((ma / tot) * 100) : 100 };
+  });
+  // monopolar ou bipolar equilibrado → soma de uma polaridade; se desequilibrado,
+  // o case completa a diferença e o total entregue é o maior dos dois lados
+  return { ...prog, contatos, amp: Math.max(cat, ano) };
+};
+
+// Converte % → mA ao entrar no modo 'mA' (distribui a amplitude total
+// proporcionalmente às % dentro de cada polaridade).
+const inicializarMaDePerc = (prog) => {
+  const contatos = { ...(prog.contatos || {}) };
+  const somaPerc = { '-': 0, '+': 0 };
+  Object.values(contatos).forEach(c => { if (c && c.state !== 'off') somaPerc[c.state] += (c.perc ?? 100); });
+  const amp = Number(prog.amp) || 0;
+  Object.entries(contatos).forEach(([k, c]) => {
+    if (!c || c.state === 'off') return;
+    const tot = somaPerc[c.state] || 1;
+    contatos[k] = { ...c, ma: r2(amp * (c.perc ?? 100) / tot) };
+  });
+  return recalcularProgramaPorMa({ ...prog, contatos, modoContato: 'mA' });
+};
+
+// Corrente por contato (mA, sem sinal) em qualquer modo. Em modo '%', as % são
+// normalizadas dentro de cada polaridade e o total de cada polaridade = amp.
+const correntesPorContato = (contatos, amp, modoContato) => {
+  const out = {};
+  const ativos = Object.entries(contatos || {}).filter(([, c]) => c && c.state !== 'off');
+  if (modoContato === 'mA') {
+    ativos.forEach(([k, c]) => { out[k] = { state: c.state, ma: Number(c.ma) || 0 }; });
+    return out;
+  }
+  const somaPerc = { '-': 0, '+': 0 };
+  ativos.forEach(([, c]) => { somaPerc[c.state] += (c.perc ?? 100); });
+  ativos.forEach(([k, c]) => {
+    out[k] = { state: c.state, ma: (Number(amp) || 0) * (c.perc ?? 100) / (somaPerc[c.state] || 1) };
+  });
+  return out;
+};
+
+// Texto de um contato para prontuário: '-', '-(30%)', '-(1.5mA)'
+const textoContato = (c, modoContato) => {
+  const st = c?.state || 'off';
+  if (st === 'off') return '0';
+  if (modoContato === 'mA') return `${st}(${(Number(c.ma) || 0).toFixed(1)}mA)`;
+  const perc = c.perc;
+  return perc < 100 ? `${st}(${perc}%)` : st;
 };
 
 // ─── PROGRAM FACTORY ─────────────────────────────────────────────────────────
@@ -182,6 +253,9 @@ const normalizeContatos = (contatos, tipoEl = ELETRODO_PADRAO) => {
     const percNum = Number(v.perc);
     const perc = Number.isFinite(percNum) ? Math.min(100, Math.max(0, Math.round(percNum))) : 100;
     base[k] = { state, perc: state === 'off' ? 100 : perc };
+    // modo "mA por contato": preserva a corrente individual
+    const maNum = Number(v.ma);
+    if (state !== 'off' && Number.isFinite(maNum) && maNum >= 0) base[k].ma = maNum;
   });
   return base;
 };
@@ -198,6 +272,7 @@ const normalizePrograma = (prog, tipoEl = ELETRODO_PADRAO) => {
     freq: num(p.freq, 130),
     efeito: p.efeito || 'neutro',
     cycling: !!p.cycling,
+    modoContato: p.modoContato === 'mA' ? 'mA' : 'perc',
   };
 };
 
@@ -272,6 +347,7 @@ export {
   EFEITO_OPTS, getEfeitoCor,
   // contatos e programas
   getContatosIniciais, getStringConfig, contatosParaTextoProntuario,
+  somaPolaridades, recalcularProgramaPorMa, inicializarMaDePerc, correntesPorContato, textoContato,
   criarProgramaVazio, convertParsedGrupos,
   normalizeContatos, normalizePrograma, normalizeGrupos,
   // diversos

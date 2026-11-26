@@ -1,9 +1,10 @@
 import React, { useState, useRef } from 'react';
-import { getEletrodo, MARCADOR_LETRAS, getStringConfig } from './constants';
+import { getEletrodo, MARCADOR_LETRAS, getStringConfig, somaPolaridades } from './constants';
 import { classifyStim, getDirLevel, parseConfigToContatos } from './vectorHelpers';
 import { ControleParametro } from './DisplayComponents';
 
-const VisualizadorEletrodo = ({ lado, tipoEletrodo, contatos, onChangeState, onChangePerc }) => {
+const VisualizadorEletrodo = ({ lado, tipoEletrodo, contatos, onChangeState, onChangePerc, modoContato = 'perc', onChangeMa }) => {
+  const modoMa = modoContato === 'mA';
   const [editandoMICC, setEditandoMICC] = useState(null);
   const timerRef = useRef(null);
 
@@ -93,7 +94,10 @@ const VisualizadorEletrodo = ({ lado, tipoEletrodo, contatos, onChangeState, onC
                         className={`${widthClass} ${dim.btnH} rounded-lg border-2 flex flex-col items-center justify-center font-bold ${dim.txt} transition-transform select-none ${cores[contato.state]}`}
                       >
                         <span>{label}</span>
-                        {contato.state !== 'off' && contato.perc < 100 && (
+                        {contato.state !== 'off' && modoMa && (
+                          <span className={`${dim.perc} opacity-90 leading-tight`}>{(Number(contato.ma) || 0).toFixed(1)}mA</span>
+                        )}
+                        {contato.state !== 'off' && !modoMa && contato.perc < 100 && (
                           <span className={`${dim.perc} opacity-90 leading-tight`}>{contato.perc}%</span>
                         )}
                       </button>
@@ -105,14 +109,24 @@ const VisualizadorEletrodo = ({ lado, tipoEletrodo, contatos, onChangeState, onC
                         >
                           <label className="text-[10px] font-bold text-slate-500 uppercase mb-2 block">Corrente {label}</label>
                           <div className="flex items-center gap-2 mb-2">
-                            <input
-                              type="number" min="0" max="100" step="5"
-                              value={contato.perc}
-                              onChange={(e) => onChangePerc(chave, Math.min(100, Math.max(0, parseInt(e.target.value) || 0)))}
-                              className="w-16 text-center font-bold text-sm text-indigo-700 bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-indigo-400 px-1 py-0.5"
-                              autoFocus
-                            />
-                            <span className="text-xs font-bold text-slate-500">%</span>
+                            {modoMa ? (
+                              <input
+                                type="number" min="0" max="25.5" step="0.1"
+                                value={contato.ma ?? 0}
+                                onChange={(e) => { const v = parseFloat(e.target.value); onChangeMa?.(chave, Number.isFinite(v) ? Math.max(0, Math.round(v * 100) / 100) : 0); }}
+                                className="w-16 text-center font-bold text-sm text-indigo-700 bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-indigo-400 px-1 py-0.5"
+                                autoFocus
+                              />
+                            ) : (
+                              <input
+                                type="number" min="0" max="100" step="5"
+                                value={contato.perc}
+                                onChange={(e) => onChangePerc(chave, Math.min(100, Math.max(0, parseInt(e.target.value) || 0)))}
+                                className="w-16 text-center font-bold text-sm text-indigo-700 bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-indigo-400 px-1 py-0.5"
+                                autoFocus
+                              />
+                            )}
+                            <span className="text-xs font-bold text-slate-500">{modoMa ? 'mA' : '%'}</span>
                           </div>
                           <div className="flex justify-end">
                             <button onClick={() => setEditandoMICC(null)} className="text-[10px] bg-slate-100 px-3 py-1 rounded font-bold hover:bg-slate-200">OK</button>
@@ -128,23 +142,39 @@ const VisualizadorEletrodo = ({ lado, tipoEletrodo, contatos, onChangeState, onC
           <div className="w-4 h-6 bg-slate-300 rounded-b-full mt-1"></div>
         </div>
       </div>
-      <p className="text-[9px] text-slate-400 mt-4 text-center leading-tight">Segure o clique para %</p>
+      <p className="text-[9px] text-slate-400 mt-4 text-center leading-tight">Segure o clique para {modoMa ? 'mA' : '%'}</p>
     </div>
   );
 };
 
 
 
-const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, modoAmplitude, onUpdateProg, onUpdateState, onUpdatePerc, historicoRef, isMatchExato, marcadores, marcadoresRing, marcadoresTodosL, historicoTodos, structuralMap, onAdicionarMarcador, onDesfazerMarcadores, cycling, onToggleCycling, impedancia, onImpedanciaChange, impedanciaL, impedanciaR, ignorarPerc }) => {
+const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, modoAmplitude, onUpdateProg, onUpdateState, onUpdatePerc, onUpdateMa, onToggleModoContato, historicoRef, isMatchExato, marcadores, marcadoresRing, marcadoresTodosL, historicoTodos, structuralMap, onAdicionarMarcador, onDesfazerMarcadores, cycling, onToggleCycling, impedancia, onImpedanciaChange, impedanciaL, impedanciaR, ignorarPerc }) => {
   const listaColaterais = ["Parestesia", "Cápsula", "Disartria", "Outros"];
   const listaPositivos = ["tremor", "rigidez", "bradicinesia"];
   const configStr = getStringConfig(programa.contatos, ignorarPerc);
+  const modoMa = programa.modoContato === 'mA';
+  const somas = modoMa ? somaPolaridades(programa.contatos) : null;
+  // Em mA por contato, cátodos ≠ ânodos significa que a diferença retorna pelo case
+  const retornoCase = somas && somas.cat > 0 && somas.ano > 0 ? Math.round((somas.cat - somas.ano) * 100) / 100 : 0;
 
   return (
     <div className={`flex flex-col bg-white rounded-xl border ${isMatchExato ? 'border-emerald-400 ring-2 ring-emerald-100 shadow-emerald-100' : 'border-slate-200'} shadow-sm relative overflow-hidden h-full`}>
       <div className={`p-2 border-b flex justify-between items-center ${isMatchExato ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}`}>
         <span className="text-xs font-bold text-slate-600">{isInterleaving ? `Programa ${index + 1}` : 'Programa Principal'}</span>
         <div className="flex items-center gap-3">
+          {/* Modo de amplitude: total + % (padrão) ou mA individual por contato */}
+          {modoAmplitude !== 'V' && (
+            <div className="flex items-center rounded overflow-hidden border border-slate-200 text-[9px] font-bold"
+              title="Amplitude total com % por contato (padrão) ou corrente individual em mA por contato (total = soma)">
+              {[['perc','Total + %'],['mA','mA/contato']].map(([m, lbl]) => (
+                <button key={m} onClick={() => { if ((programa.modoContato === 'mA') !== (m === 'mA')) onToggleModoContato?.(lado, index); }}
+                  className={`px-1.5 py-0.5 transition-all ${(modoMa ? 'mA' : 'perc') === m ? 'bg-indigo-600 text-white' : 'bg-white text-slate-400 hover:text-slate-600'}`}>
+                  {lbl}
+                </button>
+              ))}
+            </div>
+          )}
           {/* Item 5: Cycling */}
           <label className="flex items-center gap-1 cursor-pointer text-[10px] font-bold text-slate-500">
             <input type="checkbox" checked={cycling} onChange={onToggleCycling} className="accent-indigo-600" />
@@ -165,6 +195,8 @@ const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, m
             lado={lado} tipoEletrodo={tipoEletrodo} contatos={programa.contatos}
             onChangeState={(k, s) => onUpdateState(lado, index, k, s)}
             onChangePerc={(k, p) => onUpdatePerc(lado, index, k, p)}
+            modoContato={programa.modoContato}
+            onChangeMa={(k, ma) => onUpdateMa?.(lado, index, k, ma)}
           />
           {/* Impedância moves under electrode when wide */}
           {!isInterleaving && (
@@ -194,8 +226,16 @@ const RenderPrograma = ({ lado, programa, index, isInterleaving, tipoEletrodo, m
         <div className="w-full flex flex-col justify-center flex-1">
           <ControleParametro
             label="Amplitude" valor={programa.amp} unidade={modoAmplitude || "mA"} step={0.1} min={0} max={modoAmplitude === "V" ? 12 : 8}
-            onChange={(v) => onUpdateProg(lado, index, 'amp', v)} isAmplitude={true} historicoRef={historicoRef} marcadores={marcadores} marcadoresRing={marcadoresRing} marcadoresTodosL={marcadoresTodosL} historicoTodos={historicoTodos} structuralMap={structuralMap} tipoEletrodo={tipoEletrodo} modoAmplitude={modoAmplitude} impedanciaL={impedanciaL} impedanciaR={impedanciaR} lado={lado} programaContatos={programa.contatos} sessaoAtualTimestamp={(Array.isArray(historicoRef) ? historicoRef[0]?.date : undefined) || Date.now()}
+            onChange={(v) => onUpdateProg(lado, index, 'amp', v)} travado={modoMa} modoContato={programa.modoContato} pwAtual={programa.pw} isAmplitude={true} historicoRef={historicoRef} marcadores={marcadores} marcadoresRing={marcadoresRing} marcadoresTodosL={marcadoresTodosL} historicoTodos={historicoTodos} structuralMap={structuralMap} tipoEletrodo={tipoEletrodo} modoAmplitude={modoAmplitude} impedanciaL={impedanciaL} impedanciaR={impedanciaR} lado={lado} programaContatos={programa.contatos} sessaoAtualTimestamp={(Array.isArray(historicoRef) ? historicoRef[0]?.date : undefined) || Date.now()}
           />
+          {modoMa && somas && (
+            <p className="text-[9px] text-slate-500 -mt-2 mb-1 font-mono">
+              Σ cátodos {somas.cat.toFixed(1)} mA{somas.ano > 0 ? ` · Σ ânodos ${somas.ano.toFixed(1)} mA` : ''}
+              {retornoCase !== 0 && (
+                <span className="text-amber-600 font-bold"> · case como {retornoCase > 0 ? 'ânodo' : 'cátodo'} ({Math.abs(retornoCase).toFixed(1)} mA)</span>
+              )}
+            </p>
+          )}
           <div className="flex flex-col mt-2">
             <ControleParametro label="Pulso" valor={programa.pw} unidade="µs" step={10} min={30} max={210} onChange={(v) => onUpdateProg(lado, index, 'pw', v)}/>
             <ControleParametro label="Freq." valor={programa.freq} unidade="Hz" step={5} min={60} max={250} onChange={(v) => onUpdateProg(lado, index, 'freq', v)}/>
