@@ -190,3 +190,47 @@ export const estimarVTA = (params, { eLimiar60 = E_LIMIAR_60US, sigma = SIGMA_PA
 };
 
 export const nNiveisDoEletrodo = (tipo) => getEletrodo(tipo).nNiveis;
+
+// ─── VTA EM 3 PLANOS (visão "3D") ─────────────────────────────────────────────
+// Calcula, para uma programação, o contorno axial (no z do cátodo) e os dois
+// cortes longitudinais: angLat (frente: eixo lateral) e angAP (lado: eixo AP).
+// `detalhe` = 'fino' para o programa atual, 'grosso' para histórico/marcadores.
+const _cache3 = new Map();
+export const estimarVTA3Planos = (params, { eLimiar60 = E_LIMIAR_60US, sigma = SIGMA_PADRAO, fatorAnodo = FATOR_ANODO_PADRAO,
+                                            angLat, angAP, detalhe = 'grosso', chave } = {}) => {
+  const k = chave ? `${chave}|${eLimiar60}|${sigma}|${fatorAnodo}|${angLat.toFixed(3)}|${angAP.toFixed(3)}|${detalhe}` : null;
+  if (k && _cache3.has(k)) return _cache3.get(k);
+  const fino = detalhe === 'fino';
+  const fontes = montarFontes(params);
+  const eLimiar = limiarParaPW(eLimiar60, params.pw);
+  let out;
+  if (!fontes.length) {
+    out = null;
+  } else {
+    const z = zCentral(fontes);
+    const zs = fontes.map(f => f.z);
+    const zMin = Math.min(...zs) - 5, zMax = Math.max(...zs) + 5;
+    const optL = { zMin, zMax, passoZ: fino ? 0.1 : 0.2, passo: fino ? 0.05 : 0.1, rMax: 7, sigma, fatorAnodo };
+    const axial = contornoAxial(fontes, z, eLimiar, { nAng: fino ? 72 : 36, passo: fino ? 0.05 : 0.1, rMax: 7, sigma, fatorAnodo });
+    out = {
+      z, eLimiar, axial, resumo: resumoContorno(axial),
+      lat: contornoLongitudinal(fontes, angLat, eLimiar, optL),
+      ap:  contornoLongitudinal(fontes, angAP,  eLimiar, optL),
+    };
+  }
+  if (k) {
+    if (_cache3.size > 2000) _cache3.clear();
+    _cache3.set(k, out);
+  }
+  return out;
+};
+
+// Ponto de maior alcance horizontal de um corte longitudinal: {z, x} (x>0 = lado +)
+export const pontoMaxLongitudinal = (faixas) => {
+  let best = null;
+  (faixas || []).forEach(f => f.forEach(p => {
+    if (!best || p.rPos > Math.abs(best.x)) best = { z: p.z, x: p.rPos };
+    if (p.rNeg > Math.abs(best.x)) best = { z: p.z, x: -p.rNeg };
+  }));
+  return best;
+};
